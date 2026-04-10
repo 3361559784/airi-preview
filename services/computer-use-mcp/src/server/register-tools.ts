@@ -60,6 +60,11 @@ import { registerCodingTools } from './register-coding'
 import { createAcquirePtyCallback, executeApprovedPtyCreate } from './register-pty'
 import { registerToolWithDescriptor, requireDescriptor } from './tool-descriptors/register-helper'
 import {
+  buildCrossLaneAdvisory,
+  inferToolLane,
+  shouldUpdateActiveLane,
+} from './tool-lane-hygiene'
+import {
   captureClickEvidence,
   captureHandoffEvidence,
   captureUiInteractionEvidence,
@@ -212,9 +217,55 @@ function buildBrowserDomErrorWithRepair(error: unknown, selector: string, action
 }
 
 export function registerComputerUseTools(params: RegisterComputerUseToolsOptions) {
-  const { server, runtime, executeAction, enableTestTools } = params
+  const { runtime, executeAction, enableTestTools } = params
+
+  // --- Tool Lane Hygiene ---
+  // We wrap the raw MCPServer instance to intercept all `server.tool()` calls
+  // globally for this session, allowing us to enforce surface lane hygiene.
+  const hygieneServer = new Proxy(params.server, {
+    get(target, prop, receiver) {
+      if (prop === 'tool') {
+        return (name: string, description: string, schema: any, handler: any) => {
+          const wrappedHandler = async (input: any, extra: any) => {
+            const lane = inferToolLane(name)
+            let advisory: string | null = null
+
+            if (lane) {
+              const activeLane = runtime.stateManager.getState().inferredActiveLane
+              advisory = buildCrossLaneAdvisory({
+                toolName: name,
+                toolLane: lane,
+                inferredActiveLane: activeLane as import('./tool-descriptors').ToolLane | undefined,
+              })
+
+              if (shouldUpdateActiveLane(lane)) {
+                runtime.stateManager.updateInferredLane(lane)
+              }
+            }
+
+            const result = await handler(input, extra)
+
+            // Inject the advisory at the end of the text content if applicable
+            if (advisory && result && Array.isArray(result.content)) {
+              result.content.push(textContent('\n\n' + advisory))
+            }
+
+            return result
+          }
+          return Reflect.apply(target.tool as Function, target, [name, description, schema, wrappedHandler])
+        }
+      }
+      return Reflect.get(target, prop, receiver)
+    }
+  })
+
+  // Override server with the hygiene-wrapped instance so all local inline calls use the proxy
+  const server = hygieneServer
+  // Create wrapped params for any external sub-registry calls
+  const wrappedParams = { ...params, server: hygieneServer }
+
   const executePrepTool = createWorkflowPrepToolExecutor(runtime)
-  registerCodingTools(params)
+  registerCodingTools(wrappedParams)
   const acquirePty = createAcquirePtyCallback(runtime)
   const coordinator = runtime.coordinator
 
