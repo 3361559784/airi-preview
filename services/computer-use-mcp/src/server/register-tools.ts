@@ -252,7 +252,7 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
 
             return result
           }
-          return Reflect.apply(target.tool as Function, target, [name, description, schema, wrappedHandler])
+          return params.server.tool(name, description, schema, wrappedHandler)
         }
       }
       return Reflect.get(target, prop, receiver)

@@ -1,0 +1,279 @@
+diff --git a/services/computer-use-mcp/src/coding/verification-gate.ts b/services/computer-use-mcp/src/coding/verification-gate.ts
+index 73eeff35..c4623919 100644
+--- a/services/computer-use-mcp/src/coding/verification-gate.ts
++++ b/services/computer-use-mcp/src/coding/verification-gate.ts
+@@ -74,6 +74,12 @@ function normalizeCommand(command?: string) {
+   return (command || '').trim().replace(WHITESPACE_RE, ' ').toLowerCase()
+ }
+ 
++function extractFileBaseName(filePath: string) {
++  const parts = filePath.split(/[\\/]/)
++  const last = parts[parts.length - 1] || filePath
++  return last.split('.')[0] || last
++}
++
+ function commandTargetsReviewedFiles(command: string, fileHints: string[]) {
+   if (OBVIOUS_NOOP_RE.test(command)) {
+     return false
+@@ -81,7 +87,20 @@ function commandTargetsReviewedFiles(command: string, fileHints: string[]) {
+ 
+   return fileHints.some((filePath) => {
+     const normalizedPath = filePath.trim().toLowerCase()
+-    return Boolean(normalizedPath) && command.includes(normalizedPath)
++    if (!normalizedPath) return false
++
++    // Direct match (e.g., command includes precise filepath)
++    if (command.includes(normalizedPath)) {
++      return true
++    }
++
++    // Attempt base name match to capture test equivalents (A.ts -> A.test.ts)
++    const base = extractFileBaseName(normalizedPath)
++    if (base && (command.includes(`/${base}.`) || command.includes(` ${base}.`))) {
++      return true
++    }
++
++    return false
+   })
+ }
+ 
+@@ -364,19 +383,29 @@ export function evaluateCodingVerificationGate(params: {
+       const reasonCode: CodingVerificationGateReasonCode = triggers.has('no_validation_run')
+         ? 'no_validation_run'
+         : 'validation_command_mismatch'
++      
++      const explanation = reasonCode === 'validation_command_mismatch'
++        ? 'Coverage Evidence mismatch: The validation command you ran was either too broad (e.g. global test) or unrelated to the files you modified. You MUST run a scoped test targeting your specific changes directly.'
++        : 'Validation evidence is insufficient; a single bounded recheck is required.'
++
+       return {
+         decision: 'recheck_once',
+         finalReportStatus: 'in_progress',
+         workflowOutcome: 'failed',
+         reasonCode,
+-        explanation: 'Validation evidence is insufficient; a single bounded recheck is required.',
++        explanation,
+         verificationEvidenceSummary: evidence,
+       }
+     }
+ 
++    const reasonCode = triggers.has('no_validation_run') ? 'no_validation_run' : 'validation_command_mismatch'
++    const explanation = reasonCode === 'validation_command_mismatch'
++      ? 'Coverage Evidence mismatch remains unresolved after bounded recheck.'
++      : 'Validation evidence remains insufficient after bounded recheck.'
++
+     return buildNeedsFollowUpDecision({
+-      reasonCode: triggers.has('no_validation_run') ? 'no_validation_run' : 'validation_command_mismatch',
+-      explanation: 'Validation evidence remains insufficient after bounded recheck.',
++      reasonCode,
++      explanation,
+       evidence,
+       finalReportStatus: 'failed',
+     })
+diff --git a/services/computer-use-mcp/src/server/action-executor.ts b/services/computer-use-mcp/src/server/action-executor.ts
+index e4c259de..008cffe9 100644
+--- a/services/computer-use-mcp/src/server/action-executor.ts
++++ b/services/computer-use-mcp/src/server/action-executor.ts
+@@ -1,3 +1,4 @@
++import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
+ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+ 
+ import type {
+@@ -375,6 +376,29 @@ export function createExecuteAction(runtime: ComputerUseServerRuntime): ExecuteA
+           break
+         }
+         case 'coding_report_status': {
++          const handoff = runtime.stateManager.getState().activeCrossLaneHandoff
++          if (handoff && handoff.status === 'pending') {
++            const unmetConstraints = handoff.constraints.filter(c => c.required && c.expectedValue)
++            if (unmetConstraints.length > 0) {
++              const snapshot = await coordinator.refreshSnapshot('tool_entry')
++              const fg = snapshot.foregroundContext
++              const text = `${fg.appName || ''} ${fg.windowTitle || ''}`.toLowerCase()
++              for (const c of unmetConstraints) {
++                if (c.expectedValue && !text.includes(c.expectedValue.toLowerCase())) {
++                  throw new McpError(
++                    ErrorCode.InvalidParams,
++                    `UI_VERIFICATION_FAILED: Cross-Lane Constraint Verification Failed. Expected to find "${c.expectedValue}" for constraint "${c.description}", but current foreground context is "${fg.appName} - ${fg.windowTitle}". Please fulfill the validation constraint before reporting status.`
++                  )
++                }
++              }
++            }
++            runtime.stateManager.updateActiveCrossLaneHandoff({
++              ...handoff,
++              status: 'fulfilled',
++              resolvedAt: new Date().toISOString(),
++            })
++          }
++
+           const primitives = new CodingPrimitives(runtime)
+           const result = await primitives.reportStatus(normalizedAction.input.status, normalizedAction.input.summary, normalizedAction.input.filesTouched, normalizedAction.input.commandsRun, normalizedAction.input.checks, normalizedAction.input.nextStep)
+           backendResult = result
+@@ -564,16 +588,43 @@ export function createExecuteAction(runtime: ComputerUseServerRuntime): ExecuteA
+           break
+         }
+         case 'click': {
++          const fg = snapshot.foregroundContext
++          const screenHash = `${fg.appName || 'unknown'}|${fg.windowTitle || 'unknown'}`
++          const lastClick = runtime.stateManager.getState().lastUIClickContext
++          const x = normalizedAction.input.x
++          const y = normalizedAction.input.y
++
++          if (
++            lastClick &&
++            Math.abs(lastClick.x - x) <= 2 &&
++            Math.abs(lastClick.y - y) <= 2 &&
++            lastClick.screenHash === screenHash &&
++            Date.now() - lastClick.timestampMs < 30000 &&
++            (normalizedAction.input.clickCount ?? 1) === 1
++          ) {
++            throw new McpError(
++              ErrorCode.InvalidParams,
++              `UI_VERIFICATION_FAILED: You clicked this exact coordinate recently and the screen did not change. The button might be disabled, blocked, or you missed it. Use tab-navigation or look for a different target.`
++            )
++          }
++
++          runtime.stateManager.updateUIClickContext({
++            x,
++            y,
++            screenHash,
++            timestampMs: Date.now()
++          })
++
+           const pointerTrace = buildPointerTrace({
+             from: runtime.session.getPointerPosition(),
+-            to: { x: normalizedAction.input.x, y: normalizedAction.input.y },
++            to: { x, y },
+             bounds: runtime.config.allowedBounds,
+           })
+           const result = await runtime.executor.click({
+             ...normalizedAction.input,
+             pointerTrace,
+           })
+-          runtime.session.setPointerPosition({ x: normalizedAction.input.x, y: normalizedAction.input.y })
++          runtime.session.setPointerPosition({ x, y })
+           backendResult = {
+             ...result,
+             pointerTrace,
+diff --git a/services/computer-use-mcp/src/server/register-tools.ts b/services/computer-use-mcp/src/server/register-tools.ts
+index 0e372ae7..649decdc 100644
+--- a/services/computer-use-mcp/src/server/register-tools.ts
++++ b/services/computer-use-mcp/src/server/register-tools.ts
+@@ -1867,6 +1867,31 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
+         }
+       }
+ 
++      const existingHandoff = runtime.stateManager.getState().activeCrossLaneHandoff
++      if (existingHandoff && existingHandoff.status === 'pending' && targetLane === existingHandoff.sourceLane) {
++        const unmetConstraints = existingHandoff.constraints.filter(c => c.required && c.expectedValue)
++        if (unmetConstraints.length > 0) {
++          const snapshot = await runtime.coordinator.refreshSnapshot('tool_entry')
++          const fg = snapshot.foregroundContext
++          const text = `${fg.appName || ''} ${fg.windowTitle || ''}`.toLowerCase()
++
++          for (const c of unmetConstraints) {
++            if (c.expectedValue && !text.includes(c.expectedValue.toLowerCase())) {
++              return {
++                isError: true,
++                content: [textContent(`UI_VERIFICATION_FAILED: Your verification target for constraint "${c.description}" was not met. Expected to find "${c.expectedValue}" but current foreground context is "${fg.appName} - ${fg.windowTitle}". You must verify the visual state before switching back to the ${targetLane} lane.`)],
++                structuredContent: { status: 'verification_failed' }
++              }
++            }
++          }
++        }
++        runtime.stateManager.updateActiveCrossLaneHandoff({
++          ...existingHandoff,
++          status: 'fulfilled',
++          resolvedAt: new Date().toISOString(),
++        })
++      }
++
+       const handoffId = `handoff_${Date.now()}_${sourceLane}_to_${targetLane}`
+       const contract = {
+         id: handoffId,
+@@ -1879,6 +1904,8 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
+         initiatedAt: new Date().toISOString(),
+       }
+ 
++      runtime.stateManager.updateActiveCrossLaneHandoff(contract)
++
+       const constraintSummary = constraints
+         .map((c, i) => `${i + 1}. [${c.required ? 'required' : 'optional'}] ${c.description}${c.expectedValue ? ` (expected: ${c.expectedValue})` : ''}`)
+         .join('\n')
+diff --git a/services/computer-use-mcp/src/server/zero-issue-sync.test.ts b/services/computer-use-mcp/src/server/zero-issue-sync.test.ts
+index 835d07e5..b44089a6 100644
+--- a/services/computer-use-mcp/src/server/zero-issue-sync.test.ts
++++ b/services/computer-use-mcp/src/server/zero-issue-sync.test.ts
+@@ -28,6 +28,7 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
+         validationSummary: 'fake validation',
+         validationCommand: 'pnpm test',
+         baselineComparison: 'unknown',
++        recommendedNextAction: 'none',
+       },
+     })
+ 
+@@ -54,6 +55,7 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
+         validationSummary: 'fake validation',
+         validationCommand: 'pnpm test',
+         baselineComparison: 'unknown',
++        recommendedNextAction: 'none',
+       },
+     })
+ 
+@@ -75,6 +77,7 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
+         validationSummary: 'fake validation',
+         validationCommand: 'pnpm test',
+         baselineComparison: 'unknown',
++        recommendedNextAction: 'none',
+       },
+     })
+ 
+diff --git a/services/computer-use-mcp/src/state.ts b/services/computer-use-mcp/src/state.ts
+index 5f9f912d..36437018 100644
+--- a/services/computer-use-mcp/src/state.ts
++++ b/services/computer-use-mcp/src/state.ts
+@@ -10,6 +10,7 @@
+  */
+ 
+ import type { TaskMemory } from './task-memory/types'
++import type { CrossLaneHandoffContract } from './lane-handoff-contract'
+ import type {
+   BrowserSurfaceAvailability,
+   DisplayInfo,
+@@ -882,6 +883,19 @@ export interface RunState {
+   /** Sticky VS Code engineering-controller state. */
+   vscode?: VscodeControllerState
+ 
++  // --- UI Anti-Spam Tracking ---------------------------------------------
++  /** Records the last click action details to prevent spamming the same coordinates on unchanged UI. */
++  lastUIClickContext?: {
++    x: number
++    y: number
++    screenHash: string
++    timestampMs: number
++  }
++
++  // --- Cross-Lane Handoff ------------------------------------------------
++  /** Active cross-lane handoff contract that must be fulfilled before lane return. */
++  activeCrossLaneHandoff?: CrossLaneHandoffContract
++
+   // --- Terminal context -------------------------------------------------
+   /** Sticky terminal state (cwd, last exit code, etc.). */
+   terminalState?: TerminalState
+@@ -1100,6 +1114,16 @@ export class RunStateManager {
+ 
+   // -- Desktop context updates -------------------------------------------
+ 
++  updateUIClickContext(ctx: NonNullable<RunState['lastUIClickContext']> | undefined) {
++    this.state.lastUIClickContext = ctx
++    this.touch()
++  }
++
++  updateActiveCrossLaneHandoff(handoff: CrossLaneHandoffContract | undefined) {
++    this.state.activeCrossLaneHandoff = handoff
++    this.touch()
++  }
++
+   updateForegroundContext(ctx: ForegroundContext) {
+     this.state.foregroundContext = ctx
+     this.state.activeApp = ctx.appName
