@@ -943,6 +943,10 @@ export interface RunState {
   /** Buffer of recently resolved cross-lane handoffs. */
   handoffHistory: CrossLaneHandoffContract[]
 
+  // --- Tool Lane Hygiene --------------------------------------------------
+  /** Inferred active lane from the most recent non-exempt tool invocation. */
+  inferredActiveLane?: string
+
   // --- Meta -------------------------------------------------------------
   /** ISO timestamp of the last state update. */
   updatedAt: string
@@ -1318,6 +1322,15 @@ export class RunStateManager {
       this.state.activeTask.phase = phase
       this.state.activeTask.finishedAt = new Date().toISOString()
     }
+    this.touch()
+  }
+
+  /**
+   * Update the inferred active lane from the most recent tool invocation.
+   * Only non-exempt lanes (see tool-lane-hygiene.ts) should call this.
+   */
+  updateInferredLane(lane: string) {
+    this.state.inferredActiveLane = lane
     this.touch()
   }
 
