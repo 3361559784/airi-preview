@@ -8,9 +8,9 @@ import {
   buildCodingToolStructuredContent,
   summarizeCodingToolResult,
 } from '../coding/result-shape'
-import { captureVerificationEvidence } from './verification-evidence-capture'
 import { textContent } from './content'
 import { registerToolWithDescriptor, requireDescriptor } from './tool-descriptors'
+import { captureVerificationEvidence } from './verification-evidence-capture'
 
 export function registerCodingTools(options: RegisterComputerUseToolsOptions) {
   const { server, runtime, executeAction } = options
@@ -435,8 +435,8 @@ export function registerCodingTools(options: RegisterComputerUseToolsOptions) {
           observed: {
             status: result.status,
             summary: result.summary,
-            filesTouchedCount: filesTouched.length,
-            commandsRunCount: commandsRun.length,
+            filesTouchedCount: (filesTouched || []).length,
+            commandsRunCount: (commandsRun || []).length,
           },
         },
         `Coding report: ${result.summary}`,

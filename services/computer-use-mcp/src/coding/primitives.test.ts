@@ -172,22 +172,61 @@ describe('codingPrimitives', () => {
     expect(snapshot.nextStepRecommendation).toContain('Inspect the failing validation output')
   })
 
-  it('applies patch with matching literal string', async () => {
+  it('applies patch with matching literal string and records mutationProof with readback', async () => {
     const { runtime } = createRuntime()
-    // @ts-expect-error mock runtime
-    const primitives = new CodingPrimitives(runtime)
+    const primitives = new CodingPrimitives(runtime as any)
 
-    vi.mocked(fs.readFile).mockResolvedValue('line 1\nline 2\nline 3\nline 4')
+    const initialContent = 'line 1\nline 2\nline 3\nline 4'
+    const finalContent = 'line 1\nline 2 modified\nline 3 modified\nline 4'
+    vi.mocked(fs.readFile)
+      .mockResolvedValueOnce(initialContent)
+      .mockResolvedValueOnce(finalContent) // readback
+
     vi.mocked(fs.writeFile).mockResolvedValue()
 
     const res = await primitives.applyPatch('target.txt', 'line 2\nline 3', 'line 2 modified\nline 3 modified')
 
     expect(res).toContain('successfully to target.txt')
+    expect(res).toContain('Readback verified')
     expect(fs.writeFile).toHaveBeenCalledWith(
       '/mock/workspace/root/target.txt',
-      'line 1\nline 2 modified\nline 3 modified\nline 4',
+      finalContent,
       'utf8',
     )
+
+    // verify mutationProof
+    const updateCalls = (runtime.stateManager.updateCodingState as any).mock.calls
+    const lastCall = updateCalls.at(-1)[0]
+    const recentEdit = lastCall.recentEdits[0]
+    expect(recentEdit.mutationProof).toBeDefined()
+    expect(recentEdit.mutationProof.readbackVerified).toBe(true)
+    expect(recentEdit.mutationProof.beforeHash).not.toBe(recentEdit.mutationProof.afterHash)
+  })
+
+  it('fails applyPatch if readback verification mismatches', async () => {
+    const { runtime } = createRuntime()
+    const primitives = new CodingPrimitives(runtime as any)
+
+    const initialContent = 'line 1\nline 2'
+    vi.mocked(fs.readFile)
+      .mockResolvedValueOnce(initialContent)
+      .mockResolvedValueOnce(initialContent) // readback fails to reflect the write
+
+    vi.mocked(fs.writeFile).mockResolvedValue()
+
+    await expect(primitives.applyPatch('target.txt', 'line 2', 'line 3')).rejects.toThrow(/readback verification failed/)
+  })
+
+  it('fails applyPatch with exact_match hint when whitespace differs instead of trying to auto-fix', async () => {
+    const { runtime } = createRuntime()
+    const primitives = new CodingPrimitives(runtime as any)
+
+    const initialContent = '  const a = 1;\n  const b = 2;'
+    vi.mocked(fs.readFile).mockResolvedValueOnce(initialContent)
+
+    const badOldString = 'const a = 1;\nconst b = 2;' // Missing indentation
+
+    await expect(primitives.applyPatch('target.txt', badOldString, '...')).rejects.toThrow(/subtle formatting differences/)
   })
 
   it('fails path check when applying patch to a different file escape', async () => {
@@ -251,13 +290,14 @@ describe('codingPrimitives', () => {
   it('reportStatus can map "auto" strings into deterministic report fields', async () => {
     const { runtime } = createRuntime({
       recentReads: [{ path: 'test.ts', range: 'all' }],
-      recentEdits: [{ path: 'test.ts', summary: 'test' }],
+      recentEdits: [{ path: 'test.ts', summary: 'test', mutationProof: { beforeHash: 'x', afterHash: 'y', readbackVerified: true } }],
       recentCommandResults: ['Command: tests\nExit Code: 0\nStdout: ok\nStderr: none'],
-      currentPlan: {
+      currentPlanSession: {
         maxPlannedFiles: 1,
         diffBaselineFiles: [],
         reason: 'plan',
-        steps: [{ filePath: 'test.ts', intent: 'fix', source: 'target_selection', status: 'completed' }],
+        changeIntent: 'behavior_fix',
+        steps: [{ filePath: 'test.ts', intent: 'fix', source: 'target_selection', status: 'validated' }],
       },
       lastChangeReview: {
         status: 'ready_for_next_file',
@@ -295,6 +335,74 @@ describe('codingPrimitives', () => {
     expect(report.filesTouched).toContain('test.ts')
     expect(report.commandsRun[0]).toContain('Command: tests')
     expect(report.nextStep).toContain('All planned files are completed')
+  })
+
+  it('rejects reportStatus(completed) if files lack valid mutation proof', async () => {
+    const { runtime } = createRuntime({
+      recentEdits: [{ path: 'test.ts', summary: 'test', mutationProof: { beforeHash: 'x', afterHash: 'x', readbackVerified: true } }], // unchanged hash
+      currentPlanSession: { changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus('completed', 'sum', ['test.ts'], [], [], 'next')).rejects.toThrow(/lack verifiable mutation proofs/)
+  })
+
+  it('rejects reportStatus(completed) if proof readback failed', async () => {
+    const { runtime } = createRuntime({
+      recentEdits: [{ path: 'test.ts', summary: 'test', mutationProof: { beforeHash: 'x', afterHash: 'y', readbackVerified: false } }], // failed readback
+      currentPlanSession: { changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus('completed', 'sum', ['test.ts'], [], [], 'next')).rejects.toThrow(/lack verifiable mutation proofs/)
+  })
+
+  it('rejects reportStatus(completed) if proof belongs to another file', async () => {
+    const { runtime } = createRuntime({
+      recentEdits: [{ path: 'other.ts', summary: 'test', mutationProof: { beforeHash: 'x', afterHash: 'y', readbackVerified: true } }], // proof is for other.ts
+      currentPlanSession: { changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus('completed', 'sum', ['test.ts'], [], [], 'next')).rejects.toThrow(/lack verifiable mutation proofs/)
+  })
+
+  it('rejects reportStatus(completed) if actualFiles touched is empty but mutating intent is set', async () => {
+    const { runtime } = createRuntime({
+      recentEdits: [],
+      currentPlanSession: { changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus('completed', 'sum', [], [], [], 'next')).rejects.toThrow(/no files were reported as touched/)
+  })
+
+  it('rejects reportStatus(completed) if old mutationProof from different session is presented instead of new proof', async () => {
+    const { runtime } = createRuntime({
+      recentEdits: [{
+        path: 'test.ts',
+        summary: 'old test edit',
+        mutationProof: { beforeHash: 'a', afterHash: 'b', readbackVerified: true, sessionId: 'session_old_1' },
+      }],
+      currentPlanSession: { id: 'session_current_2', changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus('completed', 'sum', ['test.ts'], [], [], 'next')).rejects.toThrow(/lack verifiable mutation proofs/)
+  })
+
+  it('rejects reportStatus(completed) if proof is missing sessionId while under active session', async () => {
+    const { runtime } = createRuntime({
+      recentEdits: [{
+        path: 'test.ts',
+        summary: 'missing session id edit',
+        mutationProof: { beforeHash: 'a', afterHash: 'b', readbackVerified: true }, // no sessionId
+      }],
+      currentPlanSession: { id: 'session_current_2', changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus('completed', 'sum', ['test.ts'], [], [], 'next')).rejects.toThrow(/lack verifiable mutation proofs/)
   })
 
   it('reportStatus(auto) prioritizes planner decision reason and diagnosis winnerReason in in_progress mode', async () => {
@@ -2501,5 +2609,41 @@ describe('codingPrimitives', () => {
     expect(baseline.workspaceMetadata.gitAvailable).toBe(true)
     expect(baseline.workspacePath).toContain('/mock/workspace/root/.airi-agentic-worktree')
     expect(runtime.stateManager.getState().coding?.workspacePath).toContain('/mock/workspace/root/.airi-agentic-worktree')
+  })
+
+  describe('stalled Exploration Limit Governor', () => {
+    it('throws ANALYSIS LIMIT WARNING after 8 consecutive stalled explorations', async () => {
+      const { runtime, getCodingState } = createRuntime()
+      const primitives = new CodingPrimitives(runtime as any)
+      vi.mocked(fs.readFile).mockResolvedValue('file content')
+
+      getCodingState().consecutiveStalledExplorations = 7
+
+      await expect(primitives.readFile('/mock/workspace/root/test.ts')).rejects.toThrow(/ANALYSIS LIMIT WARNING/)
+      expect(getCodingState().consecutiveStalledExplorations).toBe(8)
+    })
+
+    it('throws ANALYSIS LIMIT EXCEEDED after 10 consecutive stalled explorations', async () => {
+      const { runtime, getCodingState } = createRuntime()
+      const primitives = new CodingPrimitives(runtime as any)
+      vi.mocked(fs.readFile).mockResolvedValue('file content')
+
+      getCodingState().consecutiveStalledExplorations = 9
+
+      await expect(primitives.readFile('/mock/workspace/root/test.ts')).rejects.toThrow(/ANALYSIS LIMIT EXCEEDED/)
+      expect(getCodingState().consecutiveStalledExplorations).toBe(10)
+    })
+
+    it('resets counter on purely state-advancing transitions', async () => {
+      const { runtime, getCodingState } = createRuntime({
+        currentPlanSession: {} as any, // no actual mutation needed to just pass reportStatus completion check
+      })
+      const primitives = new CodingPrimitives(runtime as any)
+
+      getCodingState().consecutiveStalledExplorations = 5
+
+      await primitives.compressContext('g', 'a', 'a', 'a', 'a')
+      expect(getCodingState().consecutiveStalledExplorations).toBe(0)
+    })
   })
 })

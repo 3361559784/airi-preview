@@ -879,4 +879,56 @@ describe('createExecuteAction', () => {
       }),
     )
   })
+
+  it('coding_apply_patch uses resolved exact paths to fetch mutationProof, avoiding suffix collision', async () => {
+    // Setup a state where two files have the same suffix.
+    const { runtime } = createMockRuntime({
+      configOverrides: { approvalMode: 'never' },
+    })
+
+    // Inject recentEdits with a collision path and a valid path.
+    const fakeState = {
+      coding: {
+        workspacePath: '/ws',
+        recentReads: [],
+        recentCommandResults: [],
+        recentSearches: [],
+        pendingIssues: [],
+        recentEdits: [
+          {
+            path: 'fake/test.ts',
+            summary: 'wrong proof',
+            mutationProof: { beforeHash: 'wrong', afterHash: 'wrong2', matchedOldString: '', occurrencesMatched: 1, readbackVerified: false },
+          },
+          {
+            path: 'test.ts',
+            summary: 'correct proof',
+            mutationProof: { beforeHash: 'a', afterHash: 'b', matchedOldString: 'old', occurrencesMatched: 1, readbackVerified: true },
+          },
+        ],
+      },
+    }
+
+    // Override getState to return our rigged recentEdits.
+    runtime.stateManager.getState = vi.fn().mockReturnValue(fakeState)
+
+    // And also mock primitive applyPatch since it modifies FS. We just want it to return string.
+    const executeAction = createExecuteAction(runtime)
+
+    const { CodingPrimitives } = await import('../coding/primitives')
+    const spy = vi.spyOn(CodingPrimitives.prototype, 'applyPatch').mockResolvedValue('patched')
+    const resolveSpy = vi.spyOn(CodingPrimitives.prototype, 'resolveTargetFileInput').mockReturnValue('test.ts')
+
+    const result = await executeAction({ kind: 'coding_apply_patch', input: { filePath: 'test.ts', oldString: 'old', newString: 'new' } }, 'coding_apply_patch')
+
+    expect(result.isError).not.toBe(true)
+    const structuredContent = result.structuredContent as any
+
+    expect(structuredContent.backendResult.mutationProof).toBeDefined()
+    expect(structuredContent.backendResult.mutationProof.readbackVerified).toBe(true)
+    expect(structuredContent.backendResult.mutationProof.beforeHash).toBe('a')
+
+    spy.mockRestore()
+    resolveSpy.mockRestore()
+  })
 })

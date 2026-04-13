@@ -19,6 +19,14 @@ export interface CodingApplyPatchBackendResult {
   [key: string]: unknown
   file: string
   diff: string
+  mutationProof?: {
+    matchedOldString: string
+    beforeHash: string
+    afterHash: string
+    occurrencesMatched: number
+    readbackVerified: boolean
+    sessionId?: string
+  }
 }
 
 export type CodingToolName
@@ -70,10 +78,19 @@ export function buildCodingReadFileBackendResult(params: {
 export function buildCodingApplyPatchBackendResult(params: {
   filePath: string
   summary: string
+  mutationProof?: {
+    matchedOldString: string
+    beforeHash: string
+    afterHash: string
+    occurrencesMatched: number
+    readbackVerified: boolean
+    sessionId?: string
+  }
 }): CodingApplyPatchBackendResult {
   return {
     file: params.filePath,
     diff: params.summary,
+    mutationProof: params.mutationProof,
   }
 }
 

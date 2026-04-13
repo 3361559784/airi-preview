@@ -43,6 +43,7 @@ import { exec, execFile } from 'node:child_process'
 import { env } from 'node:process'
 import { promisify } from 'node:util'
 
+import * as crypto from 'node:crypto'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 
@@ -618,7 +619,7 @@ export class CodingPrimitives {
     }
   }
 
-  private resolveTargetFileInput(filePath: string) {
+  public resolveTargetFileInput(filePath: string) {
     if (filePath !== 'auto') {
       return filePath
     }
@@ -5058,6 +5059,8 @@ export class CodingPrimitives {
         // ignore
       }
 
+      this.enforceAnalysisLimit()
+
       const existingState = state.readFileState?.[absPath]
       if (existingState && existingState.rangeStr === rangeStr && existingState.mtimeMs === mtimeMs) {
         const recentReads = [...state.recentReads, { path: resolvedFilePath, range: rangeStr }]
@@ -5282,21 +5285,42 @@ export class CodingPrimitives {
       }
 
       if (occurrences === 0) {
-        throw new Error('oldString not found in file exactly as provided. Please check for formatting differences (like indentation or quotes) or use coding_read_file to get the exact string.')
+        throw new Error('oldString not found in file exactly as provided. Please check for subtle formatting differences or use coding_read_file to get the exact string.')
       }
       if (occurrences > 1) {
         throw new Error(`oldString found ${occurrences} times in file. Please provide a more specific oldString to ensure exact match.`)
       }
 
+      const beforeHash = crypto.createHash('sha256').update(content).digest('hex')
       const newContent = content.replace(effectiveOldString, effectiveNewString)
       await fs.writeFile(absPath, newContent, 'utf8')
 
+      const afterContent = await fs.readFile(absPath, 'utf8')
+      const afterHash = crypto.createHash('sha256').update(afterContent).digest('hex')
+      const readbackVerified = afterContent === newContent
+
+      if (!readbackVerified) {
+        throw new Error('readback verification failed: file content after writing does not match the expected patched content.')
+      }
+
       const state = this.runtime.stateManager.getState().coding ?? { recentReads: [], recentEdits: [], workspacePath: '', gitSummary: '', recentCommandResults: [], recentSearches: [], pendingIssues: [] }
       const summary = `Replaced ${oldString.length} chars with ${newString.length} chars (1 occurrence)`
-      const recentEdits = [...state.recentEdits, { path: resolvedFilePath, summary }]
+
+      const mutationProof = {
+        sessionId: state.currentPlanSession?.id,
+        beforeHash,
+        afterHash,
+        matchedOldString: effectiveOldString,
+        occurrencesMatched: occurrences,
+        readbackVerified,
+      }
+
+      const recentEdits = [...state.recentEdits, { path: resolvedFilePath, summary, mutationProof }]
       this.runtime.stateManager.updateCodingState({ recentEdits })
 
-      return `Patch applied successfully to ${resolvedFilePath}.`
+      this.recordStateAdvancingTransition()
+
+      return `Patch applied successfully to ${resolvedFilePath}. Readback verified.`
     }
     catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -5305,6 +5329,7 @@ export class CodingPrimitives {
   }
 
   async compressContext(goal: string, filesSummary: string, recentResultSummary: string, unresolvedIssues: string, nextStepRecommendation: string) {
+    this.recordStateAdvancingTransition()
     const state = this.getCodingState()
 
     const actualFilesSummary = filesSummary === 'auto'
@@ -5342,10 +5367,43 @@ export class CodingPrimitives {
   }
 
   async reportStatus(status: 'completed' | 'in_progress' | 'blocked' | 'failed' | 'auto', summary: string, filesTouched: string[], commandsRun: string[], checks: string[], nextStep: string) {
+    this.recordStateAdvancingTransition()
     const state = this.getCodingState()
     const actualStatus = status === 'auto'
       ? this.inferAutoReportStatus()
       : status
+
+    if (actualStatus === 'completed') {
+      const recentEdits = state?.recentEdits || []
+      const unverifiedFiles = (filesTouched || []).filter((file) => {
+        if (file === 'auto')
+          return false
+        const resolvedFile = this.resolveTargetFileInput(file)
+        const edit = [...recentEdits].reverse().find(e => e.path === resolvedFile || this.resolveTargetFileInput(e.path) === resolvedFile)
+        const proof = edit?.mutationProof
+        const hasBaseProof = !!(proof && proof.readbackVerified && proof.beforeHash !== proof.afterHash)
+        const currentSessionId = state?.currentPlanSession?.id
+        const hasSessionMatch = currentSessionId ? proof?.sessionId === currentSessionId : true
+        return !hasBaseProof || !hasSessionMatch
+      })
+
+      if (unverifiedFiles.length > 0) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Completion Denied: You claimed the task is complete, but the following files lack verifiable mutation proofs (file hash changes or readback verification): ${unverifiedFiles.join(', ')}.\nYou must successfully apply_patch to these files before completing.`,
+        )
+      }
+
+      const mutatingIntents = ['behavior_fix', 'refactor', 'api_change', 'config_change', 'test_fix']
+      const intent = state?.currentPlanSession?.changeIntent
+
+      if ((filesTouched || []).length === 0 && (!intent || mutatingIntents.includes(intent))) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Completion Denied: You claimed the task is complete (or has mutating intent), but no files were reported as touched. You must explicitly list touched files and successfully apply_patch to them before reporting status completed.`,
+        )
+      }
+    }
 
     // Policy Constraint: Zero-Issue Sync
     if (actualStatus === 'completed' && state?.lastChangeReview?.unresolvedIssues?.length) {
@@ -5355,21 +5413,21 @@ export class CodingPrimitives {
       )
     }
 
-    const actualFilesTouched = filesTouched.length === 1 && filesTouched[0] === 'auto'
+    const actualFilesTouched = filesTouched?.length === 1 && filesTouched[0] === 'auto'
       ? (state?.currentPlan?.steps.filter(step => step.status === 'completed').map(step => step.filePath)
         || (state?.recentEdits || []).map(e => e.path)
         || [])
-      : filesTouched
+      : filesTouched || []
 
-    const actualCommandsRun = commandsRun.length === 1 && commandsRun[0] === 'auto'
-      ? ((state?.recentCommandResults || []).map(r => r.split('\n')[0] || '') || [])
-      : commandsRun
+    const actualCommandsRun = commandsRun?.length === 1 && commandsRun[0] === 'auto'
+      ? ((state?.recentCommandResults || []).map(r => typeof r === 'string' ? r.split('\n')[0] : '') || [])
+      : commandsRun || []
 
-    const actualChecks = checks.length === 1 && checks[0] === 'auto'
+    const actualChecks = checks?.length === 1 && checks[0] === 'auto'
       ? ((state?.lastChangeReview?.detectedRisks.length
           ? state.lastChangeReview.detectedRisks.map(risk => `risk:${risk}`)
-          : (state?.recentCommandResults || []).map(r => r.split('\n')[1] || '')) || [])
-      : checks
+          : (state?.recentCommandResults || []).map(r => typeof r === 'string' ? (r.split('\n')[1] || '') : '')) || [])
+      : checks || []
 
     const actualSummary = summary === 'auto'
       ? this.inferAutoReportSummary(actualStatus)
@@ -5390,5 +5448,22 @@ export class CodingPrimitives {
 
     this.runtime.stateManager.updateCodingState({ lastCodingReport })
     return lastCodingReport
+  }
+
+  private enforceAnalysisLimit() {
+    const state = this.getCodingState()
+    const stalled = (state.consecutiveStalledExplorations || 0) + 1
+    state.consecutiveStalledExplorations = stalled
+    if (stalled >= 10) {
+      throw new McpError(ErrorCode.InternalError, `ANALYSIS LIMIT EXCEEDED: You have performed 10 consecutive stalled explorations without state advancement. Action blocked.`)
+    }
+    if (stalled >= 8) {
+      throw new McpError(ErrorCode.InvalidParams, `ANALYSIS LIMIT WARNING: You have performed 8 consecutive stalled explorations. Please synthesize knowledge into a step advancement or reportStatus.`)
+    }
+  }
+
+  private recordStateAdvancingTransition() {
+    const state = this.getCodingState()
+    state.consecutiveStalledExplorations = 0
   }
 }

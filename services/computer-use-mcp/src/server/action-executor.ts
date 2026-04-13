@@ -363,9 +363,13 @@ export function createExecuteAction(runtime: ComputerUseServerRuntime): ExecuteA
         case 'coding_apply_patch': {
           const primitives = new CodingPrimitives(runtime)
           const result = await primitives.applyPatch(normalizedAction.input.filePath, normalizedAction.input.oldString, normalizedAction.input.newString)
+          const state = runtime.stateManager.getState()
+          const resolvedPath = primitives.resolveTargetFileInput(normalizedAction.input.filePath)
+          const lastEdit = state.coding?.recentEdits?.find(e => e.path === resolvedPath)
           backendResult = buildCodingApplyPatchBackendResult({
             filePath: normalizedAction.input.filePath,
             summary: result,
+            mutationProof: lastEdit?.mutationProof,
           })
           break
         }

@@ -19,6 +19,7 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
 
     // Simulate a review with hallucinated unresolved issues
     runtime.stateManager.updateCodingState({
+      currentPlanSession: { changeIntent: 'investigation' } as any,
       lastChangeReview: {
         status: 'needs_follow_up',
         recommendedNextAction: 'amend',
@@ -29,7 +30,6 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
         validationSummary: 'fake validation',
         validationCommand: 'pnpm test',
         baselineComparison: 'unknown',
-        recommendedNextAction: 'Address hallucinated issues',
       },
     })
 
@@ -47,6 +47,7 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
     const primitives = new CodingPrimitives(runtime)
 
     runtime.stateManager.updateCodingState({
+      currentPlanSession: { changeIntent: 'investigation' } as any,
       lastChangeReview: {
         status: 'needs_follow_up',
         recommendedNextAction: 'amend',
@@ -57,7 +58,6 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
         validationSummary: 'fake validation',
         validationCommand: 'pnpm test',
         baselineComparison: 'unknown',
-        recommendedNextAction: 'Fix syntax error',
       },
     })
 
@@ -70,6 +70,7 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
     const primitives = new CodingPrimitives(runtime)
 
     runtime.stateManager.updateCodingState({
+      currentPlanSession: { changeIntent: 'investigation' } as any,
       lastChangeReview: {
         status: 'ready_for_next_file',
         recommendedNextAction: 'continue',
@@ -80,7 +81,6 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
         validationSummary: 'fake validation',
         validationCommand: 'pnpm test',
         baselineComparison: 'unknown',
-        recommendedNextAction: 'Proceed to next file',
       },
     })
 
