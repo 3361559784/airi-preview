@@ -1777,6 +1777,7 @@ export class CodingPrimitives {
 
   // --- Search & Semantic ---
   async searchText(query: string, targetPath?: string, glob?: string, limit?: number) {
+    this.enforceAnalysisLimit()
     const workspaceRoot = this.getWorkspaceRoot()
     const searchRoot = this.resolveSearchRoot(targetPath)
     const effectiveLimit = clampSearchLimit(limit)
@@ -1802,6 +1803,7 @@ export class CodingPrimitives {
   }
 
   async searchSymbol(symbolName: string, targetPath?: string, glob?: string, limit?: number) {
+    this.enforceAnalysisLimit()
     const workspaceRoot = this.getWorkspaceRoot()
     const searchRoot = this.resolveSearchRoot(targetPath)
     const effectiveLimit = clampSearchLimit(limit)
@@ -1827,6 +1829,7 @@ export class CodingPrimitives {
   }
 
   async findReferences(filePath: string, line: number, column: number, limit?: number) {
+    this.enforceAnalysisLimit()
     const resolvedFilePath = this.resolveTargetFileInput(filePath)
     const root = this.getWorkspaceRoot()
     const effectiveLimit = clampSearchLimit(limit)
@@ -2549,6 +2552,7 @@ export class CodingPrimitives {
     searchQuery?: string
     maxDepth?: number
   }) {
+    this.enforceAnalysisLimit()
     return (await this.analyzeImpactWithRetrieval(params)).result
   }
 
@@ -2790,6 +2794,7 @@ export class CodingPrimitives {
     searchQuery?: string
     changeIntent: CodingChangeIntent
   }) {
+    this.enforceAnalysisLimit()
     return (await this.validateHypothesisWithRetrieval(params)).result
   }
 
@@ -2874,7 +2879,9 @@ export class CodingPrimitives {
     searchQuery?: string
     changeIntent?: CodingChangeIntent
   }) {
-    return (await this.selectTargetWithRetrieval(params)).result
+    const result = (await this.selectTargetWithRetrieval(params)).result
+    this.recordStateAdvancingTransition()
+    return result
   }
 
   async selectTargetWithRetrieval(params: {
@@ -4956,6 +4963,7 @@ export class CodingPrimitives {
         : {}),
     })
 
+    this.recordStateAdvancingTransition()
     return diagnosis
   }
 
@@ -5026,6 +5034,7 @@ export class CodingPrimitives {
       workspacePath: baseline.workspacePath,
     })
 
+    this.recordStateAdvancingTransition()
     return baseline
   }
 
@@ -5285,10 +5294,61 @@ export class CodingPrimitives {
       }
 
       if (occurrences === 0) {
-        throw new Error('oldString not found in file exactly as provided. Please check for subtle formatting differences or use coding_read_file to get the exact string.')
+        // NOTICE: Structured mismatch diagnostic — classify the failure and
+        // return the best near-neighbor snippet so the model can self-correct
+        // without an extra readFile round trip.
+        const lines = content.split('\n')
+        const oldLines = effectiveOldString.split('\n')
+        const windowSize = oldLines.length
+
+        let bestSimilarity = 0
+        let bestSnippet = ''
+        let bestLineStart = -1
+
+        // Sliding-window line-level scan for nearest neighbor
+        for (let i = 0; i <= lines.length - windowSize; i++) {
+          const candidate = lines.slice(i, i + windowSize).join('\n')
+          const sim = this.computeLineSimilarity(effectiveOldString, candidate)
+          if (sim > bestSimilarity) {
+            bestSimilarity = sim
+            bestSnippet = candidate
+            bestLineStart = i + 1
+          }
+        }
+
+        // Classify mismatch type
+        const mismatchType = bestSimilarity > 0.8
+          ? 'whitespace_drift'
+          : bestSimilarity > 0.5
+            ? 'content_stale'
+            : bestSimilarity > 0.2
+              ? 'wrong_region'
+              : 'no_match'
+
+        const clampedSnippet = bestSnippet.length > 500
+          ? `${bestSnippet.slice(0, 500)}... (truncated)`
+          : bestSnippet
+
+        const nearestHint = bestSimilarity > 0.2
+          ? `\nNearest match (${Math.round(bestSimilarity * 100)}% similar, starting at line ${bestLineStart}):\n${clampedSnippet}\nUse this exact text as oldString to retry.`
+          : '\nNo close match found. Use coding_read_file to get the exact file content.'
+
+        throw new Error(`PATCH_MISMATCH (${mismatchType}): oldString not found in file exactly as provided.${nearestHint}`)
       }
       if (occurrences > 1) {
-        throw new Error(`oldString found ${occurrences} times in file. Please provide a more specific oldString to ensure exact match.`)
+        // NOTICE: Report line numbers of each occurrence so the model can
+        // add surrounding context to disambiguate.
+        const occurrenceLines: number[] = []
+        let searchFrom = 0
+        for (let i = 0; i < occurrences; i++) {
+          const idx = content.indexOf(effectiveOldString, searchFrom)
+          if (idx === -1)
+            break
+          const lineNum = content.slice(0, idx).split('\n').length
+          occurrenceLines.push(lineNum)
+          searchFrom = idx + 1
+        }
+        throw new Error(`PATCH_AMBIGUOUS: oldString found ${occurrences} times at lines ${occurrenceLines.join(', ')}. Provide more surrounding context lines to create a unique match.`)
       }
 
       const beforeHash = crypto.createHash('sha256').update(content).digest('hex')
@@ -5448,6 +5508,28 @@ export class CodingPrimitives {
 
     this.runtime.stateManager.updateCodingState({ lastCodingReport })
     return lastCodingReport
+  }
+
+  /**
+   * Compute a rough line-level similarity ratio between two multi-line strings.
+   * Returns a value in [0, 1]. Used by applyPatch mismatch diagnostics to find
+   * the nearest neighbor window without importing a full Levenshtein library.
+   */
+  private computeLineSimilarity(a: string, b: string): number {
+    const aLines = a.split('\n')
+    const bLines = b.split('\n')
+    const maxLen = Math.max(aLines.length, bLines.length)
+    if (maxLen === 0)
+      return 1
+
+    let matchCount = 0
+    const minLen = Math.min(aLines.length, bLines.length)
+    for (let i = 0; i < minLen; i++) {
+      if (aLines[i]!.trimEnd() === bLines[i]!.trimEnd()) {
+        matchCount++
+      }
+    }
+    return matchCount / maxLen
   }
 
   private enforceAnalysisLimit() {

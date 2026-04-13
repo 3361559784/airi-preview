@@ -226,7 +226,7 @@ describe('codingPrimitives', () => {
 
     const badOldString = 'const a = 1;\nconst b = 2;' // Missing indentation
 
-    await expect(primitives.applyPatch('target.txt', badOldString, '...')).rejects.toThrow(/subtle formatting differences/)
+    await expect(primitives.applyPatch('target.txt', badOldString, '...')).rejects.toThrow(/PATCH_MISMATCH/)
   })
 
   it('fails path check when applying patch to a different file escape', async () => {
@@ -2644,6 +2644,96 @@ describe('codingPrimitives', () => {
 
       await primitives.compressContext('g', 'a', 'a', 'a', 'a')
       expect(getCodingState().consecutiveStalledExplorations).toBe(0)
+    })
+
+    it('searchText triggers governor at count 8', async () => {
+      const { runtime, getCodingState } = createRuntime()
+      const primitives = new CodingPrimitives(runtime as any)
+      vi.spyOn(searchModule, 'searchText').mockResolvedValue({ matches: [], totalMatches: 0, truncated: false } as any)
+
+      getCodingState().consecutiveStalledExplorations = 7
+
+      await expect(primitives.searchText('query')).rejects.toThrow(/ANALYSIS LIMIT WARNING/)
+      expect(getCodingState().consecutiveStalledExplorations).toBe(8)
+    })
+
+    it('searchSymbol triggers governor at count 8', async () => {
+      const { runtime, getCodingState } = createRuntime()
+      const primitives = new CodingPrimitives(runtime as any)
+      vi.spyOn(searchModule, 'searchSymbol').mockResolvedValue({ matches: [], totalMatches: 0, truncated: false } as any)
+
+      getCodingState().consecutiveStalledExplorations = 7
+
+      await expect(primitives.searchSymbol('sym')).rejects.toThrow(/ANALYSIS LIMIT WARNING/)
+      expect(getCodingState().consecutiveStalledExplorations).toBe(8)
+    })
+
+    it('findReferences triggers governor at count 8', async () => {
+      const { runtime, getCodingState } = createRuntime()
+      const primitives = new CodingPrimitives(runtime as any)
+      vi.spyOn(searchModule, 'findReferences').mockResolvedValue({ matches: [], totalMatches: 0, truncated: false } as any)
+
+      getCodingState().consecutiveStalledExplorations = 7
+
+      await expect(primitives.findReferences('test.ts', 1, 1)).rejects.toThrow(/ANALYSIS LIMIT WARNING/)
+      expect(getCodingState().consecutiveStalledExplorations).toBe(8)
+    })
+
+    it('diagnoseChanges resets stalled exploration counter', async () => {
+      const { runtime, getCodingState } = createRuntime({
+        lastChangeReview: {
+          status: 'failed',
+          filesReviewed: ['src/a.ts'],
+          diffSummary: '1 file changed',
+          diffPatchExcerpt: 'diff --git a/src/a.ts b/src/a.ts',
+          validationSummary: 'fail',
+          validationCommand: 'pnpm test',
+          baselineComparison: 'new_red',
+          detectedRisks: ['validation_failed'],
+          unresolvedIssues: [],
+          recommendedNextAction: 'amend',
+        },
+      })
+      const primitives = new CodingPrimitives(runtime as any)
+
+      getCodingState().consecutiveStalledExplorations = 5
+
+      await primitives.diagnoseChanges({})
+      expect(getCodingState().consecutiveStalledExplorations).toBe(0)
+    })
+  })
+
+  describe('applyPatch mismatch diagnostics', () => {
+    it('returns PATCH_MISMATCH with nearest snippet when oldString has whitespace drift', async () => {
+      const { runtime } = createRuntime()
+      const primitives = new CodingPrimitives(runtime as any)
+      // File has "export const flag = false\n" but oldString differs by trailing whitespace
+      vi.mocked(fs.readFile).mockResolvedValue('export const flag = false\n')
+
+      await expect(
+        primitives.applyPatch('/mock/workspace/root/index.ts', 'export const flag = false  ', 'export const flag = true'),
+      ).rejects.toThrow(/PATCH_MISMATCH/)
+    })
+
+    it('returns PATCH_MISMATCH with no_match classification when oldString is completely wrong', async () => {
+      const { runtime } = createRuntime()
+      const primitives = new CodingPrimitives(runtime as any)
+      vi.mocked(fs.readFile).mockResolvedValue('export const flag = false\n')
+
+      await expect(
+        primitives.applyPatch('/mock/workspace/root/index.ts', 'completely unrelated content here', 'replacement'),
+      ).rejects.toThrow(/PATCH_MISMATCH.*no_match/)
+    })
+
+    it('returns PATCH_AMBIGUOUS with line numbers when oldString matches multiple times', async () => {
+      const { runtime } = createRuntime()
+      const primitives = new CodingPrimitives(runtime as any)
+      const content = 'const x = 1\nconst y = 2\nconst x = 1\n'
+      vi.mocked(fs.readFile).mockResolvedValue(content)
+
+      await expect(
+        primitives.applyPatch('/mock/workspace/root/index.ts', 'const x = 1', 'const x = 99'),
+      ).rejects.toThrow(/PATCH_AMBIGUOUS.*lines 1, 3/)
     })
   })
 })

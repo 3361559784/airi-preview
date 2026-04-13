@@ -20,6 +20,7 @@ import {
   buildCodingApplyPatchBackendResult,
   buildCodingReadFileBackendResult,
 } from '../coding/result-shape'
+import { evaluateShellCommand } from '../coding/shell-command-guard'
 import {
   getOperationInvalidationTags,
   isMutatingOperationContract,
@@ -678,12 +679,22 @@ export function createExecuteAction(runtime: ComputerUseServerRuntime): ExecuteA
             resolvedScopedValidation = scopedValidation as unknown as Record<string, unknown>
           }
 
+          // Shell command guard: evaluate before execution
+          const shellGuard = evaluateShellCommand(terminalExecInput.command)
+          if (!shellGuard.allowed) {
+            throw new Error(
+              `SHELL_COMMAND_DENIED (${shellGuard.category}): ${shellGuard.reason}${
+                shellGuard.suggestedAlternative ? ` ${shellGuard.suggestedAlternative}` : ''}`,
+            )
+          }
+
           const result = await runtime.terminalRunner.execute(terminalExecInput)
           runtime.session.setTerminalState(runtime.terminalRunner.getState())
           runtime.stateManager.updateTerminalResult(result)
           backendResult = {
             ...result,
             ...(resolvedScopedValidation ? { resolvedScopedValidation } : {}),
+            ...(shellGuard.category === 'warned' ? { shellGuardWarning: shellGuard.reason } : {}),
             terminalState: toTerminalStateContent(runtime.session.getTerminalState()),
           }
           break
