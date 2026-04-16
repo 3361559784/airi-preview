@@ -168,6 +168,11 @@ func mouseUpType(_ button: CGMouseButton) -> CGEventType {
   }
 }
 
+let original = CGEvent(source: nil)?.location ?? CGPoint.zero
+defer {
+  CGWarpMouseCursorPosition(original)
+}
+
 let environment = ProcessInfo.processInfo.environment
 let rawInput = environment["COMPUTER_USE_SWIFT_STDIN"] ?? "{}"
 let inputData = rawInput.data(using: .utf8) ?? Data()
@@ -288,6 +293,11 @@ function scrollScript() {
   return String.raw`
 import CoreGraphics
 import Foundation
+
+let original = CGEvent(source: nil)?.location ?? CGPoint.zero
+defer {
+  CGWarpMouseCursorPosition(original)
+}
 
 let environment = ProcessInfo.processInfo.environment
 let rawInput = environment["COMPUTER_USE_SWIFT_STDIN"] ?? "{}"

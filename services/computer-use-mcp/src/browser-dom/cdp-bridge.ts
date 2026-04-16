@@ -81,6 +81,8 @@ export class CdpBridge {
   private nextId = 1
   private pending = new Map<number, PendingCdpRequest>()
   private status: CdpBridgeStatus
+  private heartbeatTimer?: NodeJS.Timeout
+  private heartbeatFailures = 0
 
   constructor(private readonly config: CdpBridgeConfig) {
     this.status = {
@@ -135,6 +137,7 @@ export class CdpBridge {
         this.status.pageTitle = target.title
         this.status.pageUrl = target.url
         this.status.lastError = undefined
+        this.startHeartbeat()
         resolve()
       })
 
@@ -143,6 +146,7 @@ export class CdpBridge {
       })
 
       socket.on('close', () => {
+        this.stopHeartbeat()
         this.socket = undefined
         this.status.connected = false
       })
@@ -165,6 +169,8 @@ export class CdpBridge {
    * Close the CDP connection.
    */
   async close(): Promise<void> {
+    this.stopHeartbeat()
+
     for (const [id, pending] of this.pending.entries()) {
       clearTimeout(pending.timeoutId)
       pending.reject(new Error(`CDP bridge closed before completing request ${id}`))
@@ -388,6 +394,31 @@ export class CdpBridge {
     }
     else {
       pending.resolve(data.result)
+    }
+  }
+
+  private startHeartbeat() {
+    this.stopHeartbeat()
+    this.heartbeatFailures = 0
+    this.heartbeatTimer = setInterval(async () => {
+      try {
+        await this.send('Browser.getVersion', {})
+        this.heartbeatFailures = 0
+      }
+      catch (error) {
+        this.heartbeatFailures++
+        if (this.heartbeatFailures >= 3) {
+          this.status.lastError = `CDP bridge heartbeat failed 3 times: ${error instanceof Error ? error.message : String(error)}`
+          await this.close()
+        }
+      }
+    }, 5000)
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = undefined
     }
   }
 }

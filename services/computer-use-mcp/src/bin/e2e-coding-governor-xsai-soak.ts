@@ -16,6 +16,8 @@ import { registerComputerUseTools } from '../server/register-tools'
 import { createRuntimeCoordinator } from '../server/runtime-coordinator'
 import { initializeGlobalRegistry } from '../server/tool-descriptors'
 import { RunStateManager } from '../state'
+import { projectContext } from '../projection/context-projector'
+import type { ProjectionInput } from '../projection/types'
 import {
   createDisplayInfo,
   createLocalExecutionTarget,
@@ -65,6 +67,8 @@ function loadConfig(): SoakConfig {
 // ---------------------------------------------------------------------------
 
 function createRuntime() {
+  const traceEntries: any[] = []
+
   const base = {
     config: createTestConfig({ approvalMode: 'never' }),
     stateManager: new RunStateManager(),
@@ -73,7 +77,11 @@ function createRuntime() {
       getPendingAction: () => undefined,
       listPendingActions: () => [],
       removePendingAction: () => {},
-      record: async () => undefined,
+      record: async (entry: any) => {
+        traceEntries.push({ ...entry, id: 'mock-' + traceEntries.length, at: new Date().toISOString() })
+        return undefined
+      },
+      getRecentTrace: (limit = 50) => traceEntries.slice(-Math.max(limit, 1)),
       getBudgetState: () => ({ operationsExecuted: 0, operationUnitsConsumed: 0 }),
       getLastScreenshot: () => undefined,
       getSnapshot: () => ({ operationsExecuted: 0, operationUnitsConsumed: 0, pendingActions: [] }),
@@ -802,12 +810,25 @@ export async function runSoak() {
           const timeoutId = setTimeout(() => controller.abort(new Error('STEP_TIMEOUT')), config.stepTimeoutMs)
 
           try {
+            const pInput: ProjectionInput = {
+              trace: runtime.session.getRecentTrace(50),
+              runState: runtime.stateManager.getState(),
+              systemPromptBase: scenario.system,
+            }
+            const { systemHeader, prunedTrace } = projectContext(pInput)
+
+            let finalSystem = systemHeader
+            if (prunedTrace.length > 0) {
+              const traceJSON = JSON.stringify(prunedTrace, null, 2)
+              finalSystem += `\n\n【Recent Operational Trace】\n${traceJSON}`
+            }
+
             const result = await generateText({
               model: config.model,
               baseURL: config.baseURL,
               apiKey: config.apiKey,
               tools: xsaiTools as any,
-              system: scenario.system,
+              system: finalSystem,
               messages: messagesCache,
               abortSignal: controller.signal as any,
             })

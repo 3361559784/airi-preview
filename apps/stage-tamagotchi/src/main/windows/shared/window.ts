@@ -37,6 +37,20 @@ export function transparentWindowConfig(): BrowserWindowConstructorOptions {
   }
 }
 
+export function ghostOverlayWindowConfig(): BrowserWindowConstructorOptions {
+  return {
+    ...transparentWindowConfig(),
+    focusable: false,
+    alwaysOnTop: true,
+  }
+}
+
+export function makeWindowPassThrough(window: BrowserWindow): void {
+  window.setIgnoreMouseEvents(true, { forward: true })
+  window.setAlwaysOnTop(true, 'screen-saver', 0)
+  window.setFocusable(false)
+}
+
 export function blurryWindowConfig(): BrowserWindowConstructorOptions {
   return {
     vibrancy: 'hud',
