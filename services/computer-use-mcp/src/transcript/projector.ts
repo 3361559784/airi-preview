@@ -209,7 +209,16 @@ export function projectTranscript(
     switch (block.kind) {
       case 'user':
       case 'system':
+        messages.push(entryToMessage(block.entry))
+        break
       case 'text':
+        // NOTICE: Orphan tool messages are wrapped as TextBlocks by the parser
+        // as a defensive measure. Emitting them with role:tool without a
+        // matching assistant tool_call would trigger a provider 400 error.
+        // Skip them in projection — they are structurally invalid.
+        if (block.entry.role === 'tool') {
+          break
+        }
         messages.push(entryToMessage(block.entry))
         break
       case 'tool_interaction':

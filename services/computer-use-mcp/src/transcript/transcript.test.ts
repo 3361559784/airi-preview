@@ -640,4 +640,35 @@ describe('projectTranscript', () => {
     expect(r2.metadata.compactedBlocks).toBeGreaterThan(0)
     expect(r2.metadata.projectedMessageCount).toBeLessThan(large.length)
   })
+
+  it('orphan tool messages are silently dropped from projected messages', () => {
+    resetIds()
+    // Simulate a broken transcript where a tool result has no matching assistant
+    const entries = [
+      userEntry('task'),
+      toolResult('orphan_tc', 'stray result'), // orphan — no preceding assistant tool_call
+      assistantWithTools(['tc1']),
+      toolResult('tc1', 'valid result'),
+    ]
+
+    const result = projectTranscript(entries, baseOpts)
+
+    // The orphan tool message must NOT appear in projected messages
+    const toolMsgs = result.messages.filter(m => m.role === 'tool')
+    expect(toolMsgs).toHaveLength(1)
+    expect(toolMsgs[0].tool_call_id).toBe('tc1')
+
+    // No orphan: every tool message has a matching assistant tool_call
+    const declaredIds = new Set<string>()
+    for (const m of result.messages) {
+      if (m.role === 'assistant' && m.tool_calls) {
+        for (const tc of m.tool_calls) declaredIds.add(tc.id)
+      }
+    }
+    for (const m of result.messages) {
+      if (m.role === 'tool') {
+        expect(declaredIds.has(m.tool_call_id!)).toBe(true)
+      }
+    }
+  })
 })
