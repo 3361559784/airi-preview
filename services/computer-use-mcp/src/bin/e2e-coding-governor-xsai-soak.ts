@@ -16,9 +16,9 @@ import { registerComputerUseTools } from '../server/register-tools'
 import { createRuntimeCoordinator } from '../server/runtime-coordinator'
 import { initializeGlobalRegistry } from '../server/tool-descriptors'
 import { RunStateManager } from '../state'
-import { projectContext } from '../projection/context-projector'
-import type { ProjectionInput } from '../projection/types'
-import { pruneMessageSequence } from '../runner/message-pruning'
+import { InMemoryTranscriptStore } from '../transcript/store'
+import { projectTranscript } from '../transcript/projector'
+import type { TranscriptToolCall } from '../transcript/types'
 import {
   createDisplayInfo,
   createLocalExecutionTarget,
@@ -797,8 +797,13 @@ export async function runSoak() {
 
       const xsaiTools = await Promise.all(xsaiToolPromises)
       const stepRecords: StepRecord[] = []
-      // Use scenario-specific initial user message instead of generic "Begin the scenario."
-      let messagesCache: any[] = [{ role: 'user', content: scenario.initialUserMessage }]
+
+      // Transcript truth source replaces messagesCache as the single source of history.
+      // messagesCache below is only the projected request payload for the current step.
+      const transcriptStore = new InMemoryTranscriptStore()
+      await transcriptStore.init()
+      await transcriptStore.appendUser(scenario.initialUserMessage)
+
       let totalSteps = 0
       let finalStatus: SummaryStatus = 'timeout'
       let terminalMode: 'tool' | 'assistant_text' | 'timeout' | 'crash' | 'none' = 'none'
@@ -811,40 +816,58 @@ export async function runSoak() {
           const timeoutId = setTimeout(() => controller.abort(new Error('STEP_TIMEOUT')), config.stepTimeoutMs)
 
           try {
-            // Step 1: build system header from operational trace + task memory
-            const pInput: ProjectionInput = {
-              trace: runtime.session.getRecentTrace(50),
-              runState: runtime.stateManager.getState(),
-              systemPromptBase: scenario.system,
-            }
-            const { systemHeader, prunedTrace } = projectContext(pInput)
-
-            let finalSystem = systemHeader
-            if (prunedTrace.length > 0) {
-              const traceJSON = JSON.stringify(prunedTrace, null, 2)
-              finalSystem += `\n\n【Recent Operational Trace】\n${traceJSON}`
-            }
-
-            // Step 2: prune message history to a provider-safe sliding window
-            const { messages: prunedMessages, droppedToolTurns, droppedTextTurns } = pruneMessageSequence(
-              messagesCache,
-              { maxToolTurns: 5, maxTextTurns: 3 },
+            // Unified projection: transcript truth source + operational trace → system + messages
+            const projection = projectTranscript(
+              transcriptStore.getAll(),
+              {
+                systemPromptBase: scenario.system,
+                runState: runtime.stateManager.getState(),
+                operationalTrace: runtime.session.getRecentTrace(50),
+                maxFullToolBlocks: 5,
+                maxFullTextBlocks: 3,
+                maxCompactedBlocks: 4,
+              },
             )
-            if (droppedToolTurns > 0 || droppedTextTurns > 0) {
-              console.log(`  [pruning] dropped ${droppedToolTurns} tool turns, ${droppedTextTurns} text turns (${messagesCache.length} → ${prunedMessages.length} messages)`)
+
+            if (projection.metadata.compactedBlocks > 0 || projection.metadata.droppedBlocks > 0) {
+              console.log(`  [projection] ${projection.metadata.keptFullBlocks} full, ${projection.metadata.compactedBlocks} compacted, ${projection.metadata.droppedBlocks} dropped (${projection.metadata.totalTranscriptEntries} entries → ${projection.messages.length} messages)`)
             }
 
-            // Step 3: call LLM with pruned context
             const result = await generateText({
               model: config.model,
               baseURL: config.baseURL,
               apiKey: config.apiKey,
               tools: xsaiTools as any,
-              system: finalSystem,
-              messages: prunedMessages,
+              system: projection.system,
+              messages: projection.messages as any,
               abortSignal: controller.signal as any,
             })
             messages = result.messages
+
+            // Write new messages back to transcript truth source
+            for (const msg of messages) {
+              // Only append messages that are new (not already in transcript)
+              // xsai returns the full accumulated array; we only want messages
+              // beyond what we projected.
+              if (msg.role === 'assistant') {
+                const a = msg as any
+                if (a.tool_calls && a.tool_calls.length > 0) {
+                  const tcs: TranscriptToolCall[] = a.tool_calls.map((tc: any) => ({
+                    id: tc.id,
+                    type: 'function' as const,
+                    function: { name: tc.function?.name ?? '', arguments: tc.function?.arguments ?? '{}' },
+                  }))
+                  await transcriptStore.appendAssistantToolCalls(tcs, typeof a.content === 'string' ? a.content : '')
+                }
+                else {
+                  await transcriptStore.appendAssistantText(typeof a.content === 'string' ? a.content : JSON.stringify(a.content ?? ''))
+                }
+              }
+              else if (msg.role === 'tool') {
+                const t = msg as any
+                await transcriptStore.appendToolResult(t.tool_call_id, typeof t.content === 'string' ? t.content : JSON.stringify(t.content ?? ''))
+              }
+            }
           }
           catch (stepErr: any) {
             if (stepErr?.message?.includes('STEP_TIMEOUT') || stepErr?.name === 'AbortError') {
@@ -868,11 +891,10 @@ export async function runSoak() {
             clearTimeout(timeoutId)
           }
 
-          messagesCache = messages
-
-          // Log each new message from this step
-          if (messagesCache.length > 0) {
-            const lastMsg = messagesCache.at(-1)
+          // Log each new message from this step (using result.messages directly,
+          // truth source is now TranscriptStore, not messagesCache)
+          if (messages.length > 0) {
+            const lastMsg = messages.at(-1)
             const lastContent = typeof lastMsg.content === 'string'
               ? lastMsg.content
               : JSON.stringify(lastMsg.content || '')
@@ -945,7 +967,7 @@ export async function runSoak() {
           }
 
           // Stop if the last message is not a tool result (model finished)
-          if (messagesCache.length > 0 && messagesCache.at(-1).role !== 'tool') {
+          if (messages.length > 0 && messages.at(-1).role !== 'tool') {
             terminalMode = 'assistant_text'
             // If model just stopped talking without tools, that's NOT a success.
             // The scenario determines pass/fail, not the model's decision to stop.
