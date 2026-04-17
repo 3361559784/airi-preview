@@ -8,9 +8,15 @@
  *   4. Run state + system prompt base
  *
  * Produces:
- *   - `system`: pinned header (system prompt + task memory + run state + operational trace)
- *   - `messages`: provider-safe message array with compacted summaries in middle
+ *   - `system`: pinned header (system prompt + task memory + run state +
+ *               operational trace + compacted transcript summaries)
+ *   - `messages`: provider-safe message array containing ONLY original
+ *                 transcript-derived messages (no synthetic entries)
  *   - `metadata`: observability data
+ *
+ * Compacted summaries are projection artifacts. They appear in the `system`
+ * prompt under a dedicated section, never as synthetic user/assistant messages
+ * in the `messages` array. This preserves role fidelity.
  *
  * Assembly order at call site:
  *   1. projectTranscript(...)  → { system, messages, metadata }
@@ -51,7 +57,7 @@ export interface TranscriptProjectionOptions {
   maxFullToolBlocks?: number
   /** Maximum number of recent text blocks to keep in full. */
   maxFullTextBlocks?: number
-  /** Maximum number of compacted summary blocks to include in the middle. */
+  /** Maximum number of compacted summary blocks to include in the system prompt. */
   maxCompactedBlocks?: number
 }
 
@@ -70,8 +76,9 @@ const DEFAULTS = {
  *   2. Parse transcript entries into blocks.
  *   3. Pin the first user block permanently.
  *   4. Keep the most recent N tool/text blocks in full.
- *   5. Compact oldest non-pinned blocks into summaries.
- *   6. Assemble the final messages array in correct chronological order.
+ *   5. Compact oldest non-pinned blocks into deterministic summaries.
+ *   6. Merge compacted summaries into the system prompt (NOT into messages).
+ *   7. Assemble the final messages array from kept blocks only.
  */
 export function projectTranscript(
   transcriptEntries: readonly TranscriptEntry[],
@@ -113,6 +120,7 @@ export function projectTranscript(
         keptFullBlocks: 0,
         compactedBlocks: 0,
         droppedBlocks: 0,
+        projectedMessageCount: 0,
         estimatedCharacters: system.length,
       },
     }
@@ -144,7 +152,6 @@ export function projectTranscript(
 
   // Identify blocks to compact vs drop
   const blocksToCompact: TranscriptBlock[] = []
-  const droppedBlocks: TranscriptBlock[] = []
 
   for (const block of candidateBlocks) {
     if (alwaysKept.has(block) || keptToolBlocks.has(block) || keptTextBlocks.has(block)) {
@@ -161,32 +168,34 @@ export function projectTranscript(
   const finallyDroppedCount = blocksToCompact.length - compactedResults.length
 
   // -----------------------------------------------------------------------
-  // Step 5: Assemble in chronological order
+  // Step 5: Merge compacted summaries into system prompt
+  // Compacted summaries are projection artifacts, NOT chat messages.
+  // They go into a dedicated system prompt section so the model has
+  // context about what happened in the middle of the conversation
+  // without corrupting the message role stream.
   // -----------------------------------------------------------------------
-  // Build a map of entryIdRange[0] → what to emit for each candidate block
-  type EmitItem = { sortKey: number } & (
-    | { type: 'full', block: TranscriptBlock }
-    | { type: 'compacted', compacted: CompactedBlock }
-  )
+  if (compactedResults.length > 0) {
+    const summaryLines = compactedResults.map(c => c.summary)
+    system += `\n\n【Compacted Transcript Summary (${compactedResults.length} blocks)】\n${summaryLines.join('\n')}`
+  }
+
+  // -----------------------------------------------------------------------
+  // Step 6: Assemble messages from kept blocks only (chronological order)
+  // Only original transcript-derived messages appear here.
+  // -----------------------------------------------------------------------
+  type EmitItem = { sortKey: number, block: TranscriptBlock }
 
   const emitItems: EmitItem[] = []
 
   // Pinned block first
   if (pinnedBlock) {
-    emitItems.push({ type: 'full', block: pinnedBlock, sortKey: pinnedBlock.entryIdRange[0] })
+    emitItems.push({ block: pinnedBlock, sortKey: pinnedBlock.entryIdRange[0] })
   }
-
-  // Build a Set of compacted entryIdRange starts for lookup
-  const compactedRangeStarts = new Set(compactedResults.map(c => c.entryIdRange[0]))
 
   for (const block of candidateBlocks) {
     if (alwaysKept.has(block) || keptToolBlocks.has(block) || keptTextBlocks.has(block)) {
-      emitItems.push({ type: 'full', block, sortKey: block.entryIdRange[0] })
+      emitItems.push({ block, sortKey: block.entryIdRange[0] })
     }
-  }
-
-  for (const compacted of compactedResults) {
-    emitItems.push({ type: 'compacted', compacted, sortKey: compacted.entryIdRange[0] })
   }
 
   // Sort by original chronological order
@@ -196,33 +205,24 @@ export function projectTranscript(
   const messages: TranscriptProjectedMessage[] = []
 
   for (const item of emitItems) {
-    if (item.type === 'full') {
-      const block = item.block
-      switch (block.kind) {
-        case 'user':
-        case 'system':
-        case 'text':
-          messages.push(entryToMessage(block.entry))
-          break
-        case 'tool_interaction':
-          messages.push(entryToMessage(block.assistant))
-          for (const tr of block.toolResults) {
-            messages.push(entryToMessage(tr))
-          }
-          break
-      }
-    }
-    else {
-      // Compacted → inject as a system message with the summary
-      messages.push({
-        role: 'user',
-        content: item.compacted.summary,
-      })
+    const block = item.block
+    switch (block.kind) {
+      case 'user':
+      case 'system':
+      case 'text':
+        messages.push(entryToMessage(block.entry))
+        break
+      case 'tool_interaction':
+        messages.push(entryToMessage(block.assistant))
+        for (const tr of block.toolResults) {
+          messages.push(entryToMessage(tr))
+        }
+        break
     }
   }
 
   // -----------------------------------------------------------------------
-  // Step 6: Build metadata
+  // Step 7: Build metadata
   // -----------------------------------------------------------------------
   const keptFullCount = (pinnedBlock ? 1 : 0)
     + keptToolBlocks.size
@@ -230,7 +230,12 @@ export function projectTranscript(
     + alwaysKept.size
 
   const estimatedChars = system.length
-    + messages.reduce((acc, m) => acc + (m.content?.length ?? 0) + JSON.stringify(m.tool_calls ?? []).length, 0)
+    + messages.reduce((acc, m) => {
+      const contentLen = typeof m.content === 'string'
+        ? m.content.length
+        : JSON.stringify(m.content ?? '').length
+      return acc + contentLen + JSON.stringify(m.tool_calls ?? []).length
+    }, 0)
 
   const metadata: TranscriptProjectionMetadata = {
     totalTranscriptEntries: transcriptEntries.length,
@@ -238,6 +243,7 @@ export function projectTranscript(
     keptFullBlocks: keptFullCount,
     compactedBlocks: compactedResults.length,
     droppedBlocks: finallyDroppedCount,
+    projectedMessageCount: messages.length,
     estimatedCharacters: estimatedChars,
   }
 

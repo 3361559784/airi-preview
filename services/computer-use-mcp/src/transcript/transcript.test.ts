@@ -14,7 +14,7 @@ import { projectTranscript } from './projector'
 let idCounter = 0
 function resetIds() { idCounter = 0 }
 
-function entry(role: TranscriptEntry['role'], content: string, extra?: Partial<TranscriptEntry>): TranscriptEntry {
+function entry(role: TranscriptEntry['role'], content: string | unknown[], extra?: Partial<TranscriptEntry>): TranscriptEntry {
   const id = idCounter++
   return { id, at: new Date().toISOString(), role, content, ...extra }
 }
@@ -37,7 +37,7 @@ function assistantWithTools(toolIds: string[], content = '') {
   })
 }
 
-function toolResult(toolCallId: string, content = `result for ${toolCallId}`) {
+function toolResult(toolCallId: string, content: string | unknown[] = `result for ${toolCallId}`) {
   return entry('tool', content, { toolCallId })
 }
 
@@ -85,6 +85,102 @@ describe('transcriptStore', () => {
     await store.appendUser('a')
     await store.appendUser('b')
     expect(store.length).toBe(2)
+  })
+
+  it('non-string content survives round-trip without forced stringification', async () => {
+    const store = new InMemoryTranscriptStore()
+    await store.init()
+
+    const structuredContent = [
+      { type: 'text', text: 'hello' },
+      { type: 'image_url', image_url: { url: 'data:...' } },
+    ]
+    await store.appendUser(structuredContent)
+
+    const all = store.getAll()
+    expect(all).toHaveLength(1)
+    // Content should remain as an array, not stringified
+    expect(Array.isArray(all[0].content)).toBe(true)
+    expect(all[0].content).toEqual(structuredContent)
+  })
+
+  it('appendRawMessage faithfully ingests xsai messages', async () => {
+    const store = new InMemoryTranscriptStore()
+    await store.init()
+
+    // Assistant with tool calls
+    await store.appendRawMessage({
+      role: 'assistant',
+      content: 'let me check',
+      tool_calls: [{
+        id: 'tc1',
+        type: 'function',
+        function: { name: 'read_file', arguments: '{"path": "foo.ts"}' },
+      }],
+    })
+
+    // Tool result
+    await store.appendRawMessage({
+      role: 'tool',
+      content: 'file contents here',
+      tool_call_id: 'tc1',
+    })
+
+    // Plain assistant text
+    await store.appendRawMessage({
+      role: 'assistant',
+      content: 'I see the issue',
+    })
+
+    const all = store.getAll()
+    expect(all).toHaveLength(3)
+    expect(all[0].toolCalls).toHaveLength(1)
+    expect(all[0].toolCalls![0].function.name).toBe('read_file')
+    expect(all[1].role).toBe('tool')
+    expect(all[1].toolCallId).toBe('tc1')
+    expect(all[2].content).toBe('I see the issue')
+  })
+
+  it('appendRawMessage skips unknown roles', async () => {
+    const store = new InMemoryTranscriptStore()
+    await store.init()
+
+    const result = await store.appendRawMessage({ role: 'weird_role' as any, content: 'hmm' })
+    expect(result).toBeNull()
+    expect(store.length).toBe(0)
+  })
+
+  it('delta append: a second step does not duplicate earlier entries', async () => {
+    const store = new InMemoryTranscriptStore()
+    await store.init()
+
+    // Step 1: user + assistant + tool
+    await store.appendUser('initial task')
+    await store.appendRawMessage({
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'read', arguments: '{}' } }],
+    })
+    await store.appendRawMessage({ role: 'tool', content: 'result1', tool_call_id: 'tc1' })
+
+    expect(store.length).toBe(3)
+
+    // Step 2: simulate delta-only append (only new messages from this step)
+    await store.appendRawMessage({
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'tc2', type: 'function', function: { name: 'write', arguments: '{}' } }],
+    })
+    await store.appendRawMessage({ role: 'tool', content: 'result2', tool_call_id: 'tc2' })
+
+    // Total should be 5 (3 from step 1 + 2 from step 2), NOT 8 (if we re-appended everything)
+    expect(store.length).toBe(5)
+
+    // IDs should be strictly monotonic
+    const all = store.getAll()
+    for (let i = 1; i < all.length; i++) {
+      expect(all[i].id).toBe(all[i - 1].id + 1)
+    }
   })
 })
 
@@ -172,6 +268,26 @@ describe('parseTranscriptBlocks', () => {
     expect(blocks[0].kind).toBe('system')
     expect(blocks[1].kind).toBe('user')
   })
+
+  it('multiple tool-call assistant turns remain indivisible blocks', () => {
+    resetIds()
+    const entries = [
+      userEntry('task'),
+      assistantWithTools(['tc1', 'tc2', 'tc3']),
+      toolResult('tc1'),
+      toolResult('tc2'),
+      toolResult('tc3'),
+    ]
+
+    const blocks = parseTranscriptBlocks(entries)
+    expect(blocks).toHaveLength(2) // user + 1 tool_interaction
+    if (blocks[1].kind === 'tool_interaction') {
+      expect(blocks[1].toolResults).toHaveLength(3)
+      // All tool results belong to the same block
+      expect(blocks[1].entryIdRange[0]).toBe(1) // assistant id
+      expect(blocks[1].entryIdRange[1]).toBe(4) // last tool result id
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -228,6 +344,18 @@ describe('compactBlock', () => {
     const compacted = compactBlock(block)
     expect(compacted.entryIdRange).toEqual(block.entryIdRange)
   })
+
+  it('handles structured content arrays in compaction', () => {
+    resetIds()
+    const block = parseTranscriptBlocks([
+      entry('assistant', [
+        { type: 'text', text: 'structured response here' },
+      ]),
+    ])[0]
+
+    const compacted = compactBlock(block)
+    expect(compacted.summary).toContain('structured response here')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -281,7 +409,7 @@ describe('projectTranscript', () => {
       maxCompactedBlocks: 0,
     })
 
-    // tc1 should be dropped/compacted, tc2 and tc3 kept in full
+    // tc1 should be dropped, tc2 and tc3 kept in full
     const toolCallIds = result.messages
       .filter(m => m.role === 'tool')
       .map(m => m.tool_call_id)
@@ -322,7 +450,7 @@ describe('projectTranscript', () => {
     }
   })
 
-  it('compacted blocks are distinguishable from original transcript', () => {
+  it('compacted summaries are in system prompt, NOT in messages', () => {
     resetIds()
     const entries = [
       userEntry('task'),
@@ -338,11 +466,41 @@ describe('projectTranscript', () => {
       maxCompactedBlocks: 1,
     })
 
-    // Find the compacted summary message
-    const compactedMsgs = result.messages.filter(m =>
-      m.content?.includes('[Compacted'),
+    // Compacted summaries must be in system, not in messages
+    expect(result.system).toContain('Compacted Transcript Summary')
+    expect(result.system).toContain('[Compacted tool interaction]')
+
+    // Messages must NOT contain any synthetic compacted entries
+    const hasFakeCompacted = result.messages.some(m =>
+      typeof m.content === 'string' && m.content.includes('[Compacted'),
     )
-    expect(compactedMsgs.length).toBeGreaterThanOrEqual(1)
+    expect(hasFakeCompacted).toBe(false)
+  })
+
+  it('projected messages never contain synthetic fake-user compaction records', () => {
+    resetIds()
+    const entries = [
+      userEntry('task'),
+      ...Array.from({ length: 10 }).flatMap((_, i) => [
+        assistantWithTools([`tc${i}`]),
+        toolResult(`tc${i}`),
+      ]),
+    ]
+
+    const result = projectTranscript(entries, {
+      ...baseOpts,
+      maxFullToolBlocks: 2,
+      maxCompactedBlocks: 4,
+    })
+
+    // No message should be a synthetic compaction entry
+    for (const m of result.messages) {
+      if (m.role === 'user') {
+        // User messages must be real user messages, not compacted summaries
+        const content = typeof m.content === 'string' ? m.content : ''
+        expect(content).not.toContain('[Compacted')
+      }
+    }
   })
 
   it('operational trace projector and transcript projector do not pollute each other', () => {
@@ -370,12 +528,14 @@ describe('projectTranscript', () => {
     expect(result.system).toContain('Operational Trace')
 
     // Messages should only contain transcript content, not operational trace
-    const msgTexts = result.messages.map(m => m.content ?? '')
+    const msgTexts = result.messages.map(m =>
+      typeof m.content === 'string' ? m.content : '',
+    )
     const hasOpTrace = msgTexts.some(t => t.includes('desktop_screenshot'))
     expect(hasOpTrace).toBe(false)
   })
 
-  it('returns correct metadata', () => {
+  it('returns correct metadata including projectedMessageCount', () => {
     resetIds()
     const entries = [
       userEntry('task'),
@@ -401,6 +561,7 @@ describe('projectTranscript', () => {
     expect(result.metadata.totalBlocks).toBe(6) // 1 user + 5 tool_interaction
     expect(result.metadata.keptFullBlocks).toBeGreaterThanOrEqual(3) // pinned user + 2 latest tool
     expect(result.metadata.compactedBlocks).toBeLessThanOrEqual(2)
+    expect(result.metadata.projectedMessageCount).toBe(result.messages.length)
   })
 
   it('empty transcript produces empty messages but valid system header', () => {
@@ -408,6 +569,7 @@ describe('projectTranscript', () => {
     expect(result.messages).toHaveLength(0)
     expect(result.system).toContain('coding assistant')
     expect(result.metadata.totalBlocks).toBe(0)
+    expect(result.metadata.projectedMessageCount).toBe(0)
   })
 
   it('text blocks and tool blocks have independent limits', () => {
@@ -434,11 +596,48 @@ describe('projectTranscript', () => {
     const toolMsgs = result.messages.filter(m => m.role === 'tool')
     expect(toolMsgs).toHaveLength(2)
 
-    // Only the latest text block should be present
+    // Only the latest text block should be present in messages
     const assistantTexts = result.messages.filter(m =>
-      m.role === 'assistant' && !m.tool_calls && m.content && !m.content.includes('[Compacted'),
+      m.role === 'assistant' && !m.tool_calls,
     )
     expect(assistantTexts).toHaveLength(1)
     expect(assistantTexts[0].content).toBe('thought 3')
+  })
+
+  it('projection metadata changes as context grows', () => {
+    resetIds()
+
+    // Small context: everything fits
+    const small = [
+      userEntry('task'),
+      assistantWithTools(['tc1']),
+      toolResult('tc1'),
+    ]
+
+    const r1 = projectTranscript(small, {
+      ...baseOpts,
+      maxFullToolBlocks: 2,
+      maxCompactedBlocks: 2,
+    })
+    expect(r1.metadata.compactedBlocks).toBe(0)
+    expect(r1.metadata.droppedBlocks).toBe(0)
+
+    // Larger context: compaction kicks in
+    resetIds()
+    const large = [
+      userEntry('task'),
+      ...Array.from({ length: 6 }).flatMap((_, i) => [
+        assistantWithTools([`tc${i}`]),
+        toolResult(`tc${i}`),
+      ]),
+    ]
+
+    const r2 = projectTranscript(large, {
+      ...baseOpts,
+      maxFullToolBlocks: 2,
+      maxCompactedBlocks: 2,
+    })
+    expect(r2.metadata.compactedBlocks).toBeGreaterThan(0)
+    expect(r2.metadata.projectedMessageCount).toBeLessThan(large.length)
   })
 })

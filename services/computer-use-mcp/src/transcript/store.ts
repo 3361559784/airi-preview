@@ -53,14 +53,14 @@ export class TranscriptStore {
   /**
    * Append a user message to the transcript.
    */
-  async appendUser(content: string): Promise<TranscriptEntry> {
+  async appendUser(content: string | unknown[]): Promise<TranscriptEntry> {
     return this.append({ role: 'user', content })
   }
 
   /**
    * Append an assistant message (text-only, no tool calls).
    */
-  async appendAssistantText(content: string): Promise<TranscriptEntry> {
+  async appendAssistantText(content: string | unknown[]): Promise<TranscriptEntry> {
     return this.append({ role: 'assistant', content })
   }
 
@@ -69,7 +69,7 @@ export class TranscriptStore {
    */
   async appendAssistantToolCalls(
     toolCalls: TranscriptToolCall[],
-    content?: string,
+    content?: string | unknown[],
   ): Promise<TranscriptEntry> {
     return this.append({ role: 'assistant', content, toolCalls })
   }
@@ -77,15 +77,57 @@ export class TranscriptStore {
   /**
    * Append a tool result message.
    */
-  async appendToolResult(toolCallId: string, content: string): Promise<TranscriptEntry> {
+  async appendToolResult(toolCallId: string, content: string | unknown[]): Promise<TranscriptEntry> {
     return this.append({ role: 'tool', content, toolCallId })
   }
 
   /**
    * Append a system message.
    */
-  async appendSystem(content: string): Promise<TranscriptEntry> {
+  async appendSystem(content: string | unknown[]): Promise<TranscriptEntry> {
     return this.append({ role: 'system', content })
+  }
+
+  /**
+   * Append a raw xsai message faithfully, preserving its original shape.
+   * Use this for ingesting generateText() results without coercion.
+   */
+  async appendRawMessage(msg: {
+    role: string
+    content?: unknown
+    tool_calls?: Array<{ id: string, type: string, function: { name: string, arguments: string } }>
+    tool_call_id?: string
+  }): Promise<TranscriptEntry | null> {
+    if (msg.role === 'assistant') {
+      const toolCalls = msg.tool_calls
+      if (toolCalls && toolCalls.length > 0) {
+        const tcs: TranscriptToolCall[] = toolCalls.map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.function.name, arguments: tc.function.arguments },
+        }))
+        const content = normalizeContent(msg.content)
+        return this.appendAssistantToolCalls(tcs, content)
+      }
+      else {
+        const content = normalizeContent(msg.content)
+        return this.appendAssistantText(content ?? '')
+      }
+    }
+    else if (msg.role === 'tool') {
+      const content = normalizeContent(msg.content)
+      return this.appendToolResult(msg.tool_call_id ?? '', content ?? '')
+    }
+    else if (msg.role === 'user') {
+      const content = normalizeContent(msg.content)
+      return this.appendUser(content ?? '')
+    }
+    else if (msg.role === 'system') {
+      const content = normalizeContent(msg.content)
+      return this.appendSystem(content ?? '')
+    }
+    // Unknown role — skip silently
+    return null
   }
 
   /**
@@ -158,4 +200,23 @@ export class InMemoryTranscriptStore extends TranscriptStore {
   protected override async persist(_entry: TranscriptEntry): Promise<void> {
     // No-op: skip disk persistence
   }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize unknown content from xsai messages into the transcript content type.
+ * Preserves strings and arrays as-is; converts other types to string.
+ */
+function normalizeContent(content: unknown): string | unknown[] | undefined {
+  if (content === undefined || content === null)
+    return undefined
+  if (typeof content === 'string')
+    return content
+  if (Array.isArray(content))
+    return content
+  // Fallback: coerce to string
+  return String(content)
 }

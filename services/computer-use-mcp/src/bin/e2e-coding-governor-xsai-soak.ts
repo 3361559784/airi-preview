@@ -18,7 +18,6 @@ import { initializeGlobalRegistry } from '../server/tool-descriptors'
 import { RunStateManager } from '../state'
 import { InMemoryTranscriptStore } from '../transcript/store'
 import { projectTranscript } from '../transcript/projector'
-import type { TranscriptToolCall } from '../transcript/types'
 import {
   createDisplayInfo,
   createLocalExecutionTarget,
@@ -830,8 +829,11 @@ export async function runSoak() {
             )
 
             if (projection.metadata.compactedBlocks > 0 || projection.metadata.droppedBlocks > 0) {
-              console.log(`  [projection] ${projection.metadata.keptFullBlocks} full, ${projection.metadata.compactedBlocks} compacted, ${projection.metadata.droppedBlocks} dropped (${projection.metadata.totalTranscriptEntries} entries → ${projection.messages.length} messages)`)
+              console.log(`  [projection] ${projection.metadata.keptFullBlocks} full, ${projection.metadata.compactedBlocks} compacted, ${projection.metadata.droppedBlocks} dropped (${projection.metadata.totalTranscriptEntries} entries → ${projection.metadata.projectedMessageCount} messages)`)
             }
+
+            // Remember how many messages we projected so we can compute the delta
+            const projectedLength = projection.messages.length
 
             const result = await generateText({
               model: config.model,
@@ -844,29 +846,12 @@ export async function runSoak() {
             })
             messages = result.messages
 
-            // Write new messages back to transcript truth source
-            for (const msg of messages) {
-              // Only append messages that are new (not already in transcript)
-              // xsai returns the full accumulated array; we only want messages
-              // beyond what we projected.
-              if (msg.role === 'assistant') {
-                const a = msg as any
-                if (a.tool_calls && a.tool_calls.length > 0) {
-                  const tcs: TranscriptToolCall[] = a.tool_calls.map((tc: any) => ({
-                    id: tc.id,
-                    type: 'function' as const,
-                    function: { name: tc.function?.name ?? '', arguments: tc.function?.arguments ?? '{}' },
-                  }))
-                  await transcriptStore.appendAssistantToolCalls(tcs, typeof a.content === 'string' ? a.content : '')
-                }
-                else {
-                  await transcriptStore.appendAssistantText(typeof a.content === 'string' ? a.content : JSON.stringify(a.content ?? ''))
-                }
-              }
-              else if (msg.role === 'tool') {
-                const t = msg as any
-                await transcriptStore.appendToolResult(t.tool_call_id, typeof t.content === 'string' ? t.content : JSON.stringify(t.content ?? ''))
-              }
+            // Append ONLY the new messages (delta) to the transcript truth source.
+            // xsai returns the full accumulated messages array including what we sent;
+            // only messages beyond projectedLength are new from this step.
+            const newMessages = messages.slice(projectedLength)
+            for (const msg of newMessages) {
+              await transcriptStore.appendRawMessage(msg as any)
             }
           }
           catch (stepErr: any) {

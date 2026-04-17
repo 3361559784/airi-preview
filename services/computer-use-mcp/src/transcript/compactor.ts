@@ -20,6 +20,38 @@ import type { CompactedBlock, TranscriptBlock } from './types'
 const SUMMARY_SNIPPET_LENGTH = 120
 
 /**
+ * Coerce transcript entry content to a string for summarization.
+ * Handles the widened `string | unknown[]` content type.
+ */
+function contentToString(content: string | unknown[] | undefined): string {
+  if (content === undefined || content === null)
+    return ''
+  if (typeof content === 'string')
+    return content
+  if (Array.isArray(content)) {
+    // Extract text parts from structured content arrays
+    return content
+      .map((part: any) => {
+        if (typeof part === 'string') return part
+        if (part?.type === 'text' && typeof part.text === 'string') return part.text
+        return ''
+      })
+      .filter(Boolean)
+      .join(' ')
+  }
+  return String(content)
+}
+
+/**
+ * Truncate a string to the snippet length, appending '…' if truncated.
+ */
+function snippet(text: string): string {
+  if (text.length <= SUMMARY_SNIPPET_LENGTH)
+    return text
+  return `${text.slice(0, SUMMARY_SNIPPET_LENGTH)}…`
+}
+
+/**
  * Generate a deterministic compacted summary for a transcript block.
  */
 export function compactBlock(block: TranscriptBlock): CompactedBlock {
@@ -30,11 +62,10 @@ export function compactBlock(block: TranscriptBlock): CompactedBlock {
         .join(', ')
 
       const resultSummaries = block.toolResults.map((tr) => {
-        const content = tr.content ?? ''
-        const snippet = content.slice(0, SUMMARY_SNIPPET_LENGTH)
-        const isError = content.toLowerCase().includes('error')
-          || content.toLowerCase().includes('failed')
-        return `${tr.toolCallId}: ${isError ? 'FAILED' : 'ok'} — ${snippet}${content.length > SUMMARY_SNIPPET_LENGTH ? '…' : ''}`
+        const text = contentToString(tr.content)
+        const isError = text.toLowerCase().includes('error')
+          || text.toLowerCase().includes('failed')
+        return `${tr.toolCallId}: ${isError ? 'FAILED' : 'ok'} — ${snippet(text)}`
       })
 
       const summary = [
@@ -51,23 +82,21 @@ export function compactBlock(block: TranscriptBlock): CompactedBlock {
     }
 
     case 'text': {
-      const content = block.entry.content ?? ''
-      const snippet = content.slice(0, SUMMARY_SNIPPET_LENGTH)
+      const text = contentToString(block.entry.content)
       return {
         kind: 'compacted',
         originalKind: 'text',
-        summary: `[Compacted ${block.entry.role} text] ${snippet}${content.length > SUMMARY_SNIPPET_LENGTH ? '…' : ''}`,
+        summary: `[Compacted ${block.entry.role} text] ${snippet(text)}`,
         entryIdRange: block.entryIdRange,
       }
     }
 
     case 'user': {
-      const content = block.entry.content ?? ''
-      const snippet = content.slice(0, SUMMARY_SNIPPET_LENGTH)
+      const text = contentToString(block.entry.content)
       return {
         kind: 'compacted',
         originalKind: 'user',
-        summary: `[Compacted user message] ${snippet}${content.length > SUMMARY_SNIPPET_LENGTH ? '…' : ''}`,
+        summary: `[Compacted user message] ${snippet(text)}`,
         entryIdRange: block.entryIdRange,
       }
     }

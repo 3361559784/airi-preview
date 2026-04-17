@@ -24,8 +24,13 @@ export interface TranscriptEntry {
   at: string
   /** The message role. */
   role: 'user' | 'assistant' | 'tool' | 'system'
-  /** Text content (string or structured content parts). */
-  content?: string
+  /**
+   * Message content. Accepts the same forms xsai / OpenAI wire format uses:
+   * - `string` for plain text
+   * - `unknown[]` for structured content parts (TextContentPart[], etc.)
+   * - `undefined` for assistant messages that only contain tool_calls
+   */
+  content?: string | unknown[]
   /**
    * For assistant messages that invoke tools.
    * Preserved in xsai/OpenAI wire format.
@@ -130,7 +135,7 @@ export interface TranscriptProjectionResult {
 
 export interface TranscriptProjectedMessage {
   role: 'user' | 'assistant' | 'tool' | 'system'
-  content?: string
+  content?: string | unknown[]
   tool_calls?: TranscriptToolCall[]
   tool_call_id?: string
 }
@@ -146,6 +151,8 @@ export interface TranscriptProjectionMetadata {
   compactedBlocks: number
   /** Number of blocks dropped entirely (neither kept nor compacted). */
   droppedBlocks: number
+  /** Number of projected messages in the output array. */
+  projectedMessageCount: number
   /** Rough character count of the projected messages. */
   estimatedCharacters: number
 }
