@@ -18,6 +18,7 @@ import { initializeGlobalRegistry } from '../server/tool-descriptors'
 import { RunStateManager } from '../state'
 import { projectContext } from '../projection/context-projector'
 import type { ProjectionInput } from '../projection/types'
+import { pruneMessageSequence } from '../runner/message-pruning'
 import {
   createDisplayInfo,
   createLocalExecutionTarget,
@@ -810,6 +811,7 @@ export async function runSoak() {
           const timeoutId = setTimeout(() => controller.abort(new Error('STEP_TIMEOUT')), config.stepTimeoutMs)
 
           try {
+            // Step 1: build system header from operational trace + task memory
             const pInput: ProjectionInput = {
               trace: runtime.session.getRecentTrace(50),
               runState: runtime.stateManager.getState(),
@@ -823,13 +825,23 @@ export async function runSoak() {
               finalSystem += `\n\n【Recent Operational Trace】\n${traceJSON}`
             }
 
+            // Step 2: prune message history to a provider-safe sliding window
+            const { messages: prunedMessages, droppedToolTurns, droppedTextTurns } = pruneMessageSequence(
+              messagesCache,
+              { maxToolTurns: 5, maxTextTurns: 3 },
+            )
+            if (droppedToolTurns > 0 || droppedTextTurns > 0) {
+              console.log(`  [pruning] dropped ${droppedToolTurns} tool turns, ${droppedTextTurns} text turns (${messagesCache.length} → ${prunedMessages.length} messages)`)
+            }
+
+            // Step 3: call LLM with pruned context
             const result = await generateText({
               model: config.model,
               baseURL: config.baseURL,
               apiKey: config.apiKey,
               tools: xsaiTools as any,
               system: finalSystem,
-              messages: messagesCache,
+              messages: prunedMessages,
               abortSignal: controller.signal as any,
             })
             messages = result.messages
