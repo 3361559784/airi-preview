@@ -25,6 +25,7 @@
 
 import type { SessionTraceEntry } from '../types'
 import type {
+  ArchiveCandidate,
   CompactedBlock,
   TranscriptBlock,
   TranscriptEntry,
@@ -123,6 +124,7 @@ export function projectTranscript(
         projectedMessageCount: 0,
         estimatedCharacters: system.length,
       },
+      archiveCandidates: [],
     }
   }
 
@@ -161,11 +163,22 @@ export function projectTranscript(
     blocksToCompact.push(block)
   }
 
-  // Only keep the most recent N compacted blocks; drop the rest entirely
-  const compactedResults: CompactedBlock[] = blocksToCompact
-    .slice(-maxCompactedBlocks)
-    .map(b => compactBlock(b))
-  const finallyDroppedCount = blocksToCompact.length - compactedResults.length
+  // Only keep the most recent N compacted blocks; drop the rest entirely.
+  // NOTICE: We must handle maxCompactedBlocks=0 explicitly because slice(-0)
+  // is identical to slice(0) in JavaScript, which would return the full array
+  // instead of an empty one. The explicit branch avoids this footgun.
+  let droppedSourceBlocks: TranscriptBlock[]
+  let compactedSourceBlocks: TranscriptBlock[]
+  if (maxCompactedBlocks <= 0) {
+    droppedSourceBlocks = blocksToCompact
+    compactedSourceBlocks = []
+  }
+  else {
+    droppedSourceBlocks = blocksToCompact.slice(0, -maxCompactedBlocks)
+    compactedSourceBlocks = blocksToCompact.slice(-maxCompactedBlocks)
+  }
+  const compactedResults: CompactedBlock[] = compactedSourceBlocks.map(b => compactBlock(b))
+  const finallyDroppedCount = droppedSourceBlocks.length
 
   // -----------------------------------------------------------------------
   // Step 5: Merge compacted summaries into system prompt
@@ -256,7 +269,12 @@ export function projectTranscript(
     estimatedCharacters: estimatedChars,
   }
 
-  return { system, messages, metadata }
+  // -----------------------------------------------------------------------
+  // Step 8: Build archive candidates from compacted + dropped blocks
+  // -----------------------------------------------------------------------
+  const archiveCandidates = buildArchiveCandidates(compactedSourceBlocks, droppedSourceBlocks, compactedResults)
+
+  return { system, messages, metadata, archiveCandidates }
 }
 
 // ---------------------------------------------------------------------------
@@ -275,4 +293,141 @@ function entryToMessage(entry: TranscriptEntry): TranscriptProjectedMessage {
     msg.tool_call_id = entry.toolCallId
   }
   return msg
+}
+
+/**
+ * Coerce entry content to a string for archive persistence.
+ * Unlike the compactor's snippet(), this preserves the full text.
+ */
+function contentToFullString(content: string | unknown[] | undefined): string {
+  if (content === undefined || content === null) return ''
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .map((part: any) => {
+        if (typeof part === 'string') return part
+        if (part?.type === 'text' && typeof part.text === 'string') return part.text
+        return ''
+      })
+      .filter(Boolean)
+      .join(' ')
+  }
+  return String(content)
+}
+
+/**
+ * Produce the full normalized content of a transcript block for archive persistence.
+ *
+ * NOTICE: This is intentionally separate from compactor.ts snippet() which truncates
+ * to 120 chars. Archive normalizedContent preserves the full text so humans can
+ * read it and future retrieval systems can search it.
+ */
+function normalizeBlockContent(block: TranscriptBlock): string {
+  switch (block.kind) {
+    case 'tool_interaction': {
+      const toolCalls = (block.assistant.toolCalls ?? [])
+        .map((tc) => {
+          let args = tc.function.arguments
+          // Attempt to pretty-print JSON arguments, but don't fail
+          try { args = JSON.stringify(JSON.parse(args), null, 2) } catch {}
+          return `Tool: ${tc.function.name}\nArguments:\n${args}`
+        })
+        .join('\n\n')
+
+      const results = block.toolResults
+        .map((tr) => {
+          const text = contentToFullString(tr.content)
+          return `Result (${tr.toolCallId}):\n${text}`
+        })
+        .join('\n\n')
+
+      return `${toolCalls}\n\n${results}`
+    }
+    case 'text':
+    case 'user':
+    case 'system':
+      return contentToFullString(block.entry.content)
+  }
+}
+
+/**
+ * Extract tags from a transcript block for archive metadata.
+ */
+function extractBlockTags(block: TranscriptBlock): string[] {
+  if (block.kind === 'tool_interaction') {
+    return (block.assistant.toolCalls ?? []).map(tc => tc.function.name)
+  }
+  return []
+}
+
+/**
+ * Get the earliest timestamp from a transcript block.
+ */
+function getBlockCreatedAt(block: TranscriptBlock): string {
+  switch (block.kind) {
+    case 'tool_interaction':
+      return block.assistant.at
+    case 'text':
+    case 'user':
+    case 'system':
+      return block.entry.at
+  }
+}
+
+/** Minimum normalized content length for text blocks to qualify for archiving. */
+const ARCHIVE_TEXT_MIN_LENGTH = 200
+
+/**
+ * Build archive candidates from compacted and dropped source blocks.
+ *
+ * Eligibility filter (order matters):
+ *   1. Skip system blocks
+ *   2. Skip user blocks
+ *   3. Skip orphan tool blocks (TextBlock wrapping a role:tool entry)
+ *   4. Skip text blocks with normalizedContent < 200 chars
+ *   5. Everything else → ArchiveCandidate
+ */
+function buildArchiveCandidates(
+  compactedSourceBlocks: TranscriptBlock[],
+  droppedSourceBlocks: TranscriptBlock[],
+  compactedResults: CompactedBlock[],
+): ArchiveCandidate[] {
+  const candidates: ArchiveCandidate[] = []
+
+  function tryAdd(block: TranscriptBlock, reason: 'compacted' | 'dropped', summary: string) {
+    // Skip system and user blocks
+    if (block.kind === 'system' || block.kind === 'user') return
+
+    // Skip orphan tool blocks (defensive TextBlock wrapping a role:tool entry)
+    if (block.kind === 'text' && block.entry.role === 'tool') return
+
+    const normalizedContent = normalizeBlockContent(block)
+
+    // Skip short text blocks
+    if (block.kind === 'text' && normalizedContent.length < ARCHIVE_TEXT_MIN_LENGTH) return
+
+    candidates.push({
+      reason,
+      originalKind: block.kind,
+      entryIdRange: block.entryIdRange,
+      summary,
+      normalizedContent,
+      createdAt: getBlockCreatedAt(block),
+      tags: extractBlockTags(block),
+    })
+  }
+
+  // Compacted blocks have matching CompactedBlock summaries
+  for (let i = 0; i < compactedSourceBlocks.length; i++) {
+    const summary = compactedResults[i]?.summary ?? '[no summary]'
+    tryAdd(compactedSourceBlocks[i], 'compacted', summary)
+  }
+
+  // Dropped blocks need their own summary (generate via compactBlock)
+  for (const block of droppedSourceBlocks) {
+    const compact = compactBlock(block)
+    tryAdd(block, 'dropped', compact.summary)
+  }
+
+  return candidates
 }

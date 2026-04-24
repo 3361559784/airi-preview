@@ -1,4 +1,5 @@
 export type {
+  ArchiveCandidate,
   CompactedBlock,
   ProjectedBlock,
   SystemBlock,

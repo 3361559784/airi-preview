@@ -81,7 +81,8 @@ const DEFAULT_PRUNING_POLICY: RuntimePruningPolicy = {
 /**
  * A single operational trace item projected from a SessionTraceEntry.
  * Represents an execution event (requested/executed/failed/etc.), NOT an LLM
- * conversational turn. LLM transcript lives in the Runner's messagesCache.
+ * conversational turn. The full conversational LLM transcript is stored separately
+ * in the TranscriptStore (transcript.jsonl) and merged during final prompting.
  */
 export interface ProjectedOperationalTrace {
   /** The sequence index or order */

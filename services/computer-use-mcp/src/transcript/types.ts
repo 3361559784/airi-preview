@@ -114,7 +114,35 @@ export interface CompactedBlock {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Projection Output — what the projection layer produces
+// 4. Archive Candidate — a block removed from prompt eligible for archiving
+// ---------------------------------------------------------------------------
+
+/**
+ * Describes a transcript block that was removed from the active prompt
+ * (compacted or dropped) and is eligible for persistence to the archive layer.
+ *
+ * Produced by the projector as a pure data structure — no I/O happens inside
+ * the projector. The call site decides whether and where to persist.
+ */
+export interface ArchiveCandidate {
+  /** Why this block was removed from the prompt. */
+  reason: 'compacted' | 'dropped'
+  /** Original block kind before removal. */
+  originalKind: TranscriptBlock['kind']
+  /** Entry id range of the source block. */
+  entryIdRange: [number, number]
+  /** Deterministic short summary (same as what goes into system prompt). */
+  summary: string
+  /** Full normalized content for archive persistence (NOT truncated). */
+  normalizedContent: string
+  /** ISO timestamp of the earliest entry in the block. */
+  createdAt: string
+  /** Tags derived from block content (tool names, etc). */
+  tags: string[]
+}
+
+// ---------------------------------------------------------------------------
+// 5. Projection Output — what the projection layer produces
 // ---------------------------------------------------------------------------
 
 export type ProjectedBlock = TranscriptBlock | CompactedBlock
@@ -131,6 +159,11 @@ export interface TranscriptProjectionResult {
   messages: TranscriptProjectedMessage[]
   /** Projection metadata for observability. */
   metadata: TranscriptProjectionMetadata
+  /**
+   * Blocks removed from the prompt that are eligible for archive persistence.
+   * Produced deterministically — the projector does no I/O.
+   */
+  archiveCandidates: ArchiveCandidate[]
 }
 
 export interface TranscriptProjectedMessage {

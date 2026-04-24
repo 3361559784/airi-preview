@@ -58,6 +58,7 @@ import { computeBrowserActionConfidence } from '../browser-dom/browser-action-co
 import { diagnoseBrowserActionError } from '../browser-dom/browser-repair-contract'
 import { registerCodingTools } from './register-coding'
 import { createAcquirePtyCallback, executeApprovedPtyCreate } from './register-pty'
+import { createCodingRunner, createDefaultCodingRunnerConfig } from '../coding-runner'
 import { registerToolWithDescriptor, requireDescriptor } from './tool-descriptors/register-helper'
 import {
   buildCrossLaneAdvisory,
@@ -2231,6 +2232,51 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
         structuredContent: {
           status: handoffIsReturn ? 'handoff_resolved' : 'handoff_initiated',
           contract: handoffIsReturn ? resolvedContract : contract,
+        },
+      }
+    },
+  })
+
+  registerToolWithDescriptor(server, {
+    descriptor: requireDescriptor('workflow_coding_runner'),
+
+    schema: {
+      workspacePath: z.string().min(1).describe('Absolute path to the workspace root.'),
+      taskGoal: z.string().min(1).describe('High-level description of the coding task to accomplish.'),
+      maxSteps: z.number().int().min(1).optional().describe('Optional step limit.'),
+      stepTimeoutMs: z.number().int().min(1000).optional().describe('Optional turn timeout.'),
+    },
+
+    handler: async ({ workspacePath, taskGoal, maxSteps, stepTimeoutMs }) => {
+      // Create isolated runner configuration
+      const config = createDefaultCodingRunnerConfig()
+      
+      const runner = createCodingRunner(config, {
+        runtime,
+        executeAction,
+      })
+
+      // The runner executes its isolated projection mapping internally using transcript v1.
+      const result = await runner.runCodingTask({ workspacePath, taskGoal, maxSteps, stepTimeoutMs })
+
+      let summary = ''
+      if (result.turns.length > 0) {
+        const lastTurn = result.turns[result.turns.length - 1]
+        if (lastTurn.toolName === 'coding_report_status') {
+          summary = `\nFinal Report: ${lastTurn.rawText}`
+        }
+      }
+
+      // Fallback formatting equivalent to executeWorkflow format return
+      return {
+        isError: result.status === 'crash' || result.status === 'failed',
+        content: [textContent(`Parallel Coding Runner finished with status: ${result.status}${summary}`)],
+        structuredContent: {
+          status: result.status,
+          totalSteps: result.totalSteps,
+          turnsLogLength: result.turns.length,
+          lastError: result.error,
+          transcriptMetadata: result.transcriptMetadata,
         },
       }
     },
