@@ -2,6 +2,10 @@
 
 Engineering contract for long-running coding context, transcript compaction, archived context, and future long-term memory inside `computer-use-mcp`.
 
+For the current code-state audit and follow-up slice order, see
+`coding-context-memory-substrate-audit.md`. This file remains the architectural
+contract; the audit file is the branch-local reality check.
+
 This document exists to stop the memory line from degenerating into:
 
 - blind `messagesCache` slicing
@@ -378,23 +382,21 @@ The next move is:
 
 That is the first durable version of memory that is worth shipping.
 
-## AI Engineering Evaluation & Next Steps (Addendum)
+## Current-State Note
 
-> **Evaluation Status:** Phase 1 (Archive Layer V1) perfectly implemented.
-> **Assessed by:** Gemini CLI (Senior Software Engineer)
+The original Phase 1 target was a write-only archive layer. The current code has
+already moved past that narrow statement: archive artifacts are still written as
+markdown/frontmatter files, but current-run `search()` / `readArtifact()` and
+runner tools now exist.
 
-This contract is an exceptional piece of engineering. Its core design philosophy is highly **defensive**: it correctly assumes that LLMs hallucinate and raw text contexts decay, establishing strict bulkheads (`TaskMemory`, `Archive`, `Workspace Memory`) rather than relying on naive vector prompt-stuffing.
+Current label:
 
-As evaluated against the current `computer-use-mcp` codebase, the implementation has strictly and flawlessly executed **Phase 1**:
-- `TaskMemory` boundaries remain strictly enforced with `TASK_MEMORY_LIMITS`.
-- `TranscriptStore` securely maintains the append-only truth.
-- `ArchiveContextStore` correctly enforces the V1 write-only, Frontmatter-backed `.md` storage without recklessly auto-promoting into workspace memory.
+- Archive is a current-run recallable archive.
+- Archive is not cross-run long-term memory.
+- Archive is not workspace memory.
+- Workspace memory proposal/search/read exists, but promotion governance is not
+  complete.
 
-### Strategic Recommendations for Next Phases:
-
-1. **Two-Phase Bounded Retrieval (Phase 2):** 
-   Retrieval must be strictly paginated. Implement `search_archived_context(run_id, tags)` returning only lightweight candidates (ID + Summary), forcing the model to explicitly call `read_archived_context(id)` to retrieve the full excerpt.
-2. **Structured Pollution Control:** 
-   Evolve the Frontmatter `tags` array to include discrete `error_signatures` (e.g., `EADDRINUSE`). This turns unstructured logs into indexable debugging constraints.
-3. **TTL-Governed Workspace Memory (Phase 4):**
-   Treat long-term memory like a cache. Heuristics added to Workspace Memory should have a "Time-To-Live" (TTL) or require periodic re-verification ("ground-truthing") to prevent stale rules from locking up future runs.
+Do not describe the memory line as complete. Use
+`coding-context-memory-substrate-audit.md` for the current source-of-truth map,
+known gaps, and next implementation slices.

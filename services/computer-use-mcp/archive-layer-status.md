@@ -1,93 +1,92 @@
 # Archive Layer Status
 
-当前这条 memory 线的状态，不是“长期记忆已完成”，而是：
+Current archive status for the coding context/memory line.
 
-- transcript truth source 已落地
-- transcript projection 已落地
-- archived context write path 已经长出来
-- 但 Archive Layer V1 **还没有收成干净 baseline**
+This document is narrower than `context-memory-engineering.md` and should be
+read together with `coding-context-memory-substrate-audit.md`.
 
-这份文档只记录当前 archive layer 的真实状态，避免后续切去别的工作时把问题忘掉。
+## Current Confirmed State
 
-## 当前已确认事实
+Archive is no longer just a write-path prototype.
 
-- `src/transcript/projector.ts` 已经开始返回 `archiveCandidates`
-- `src/archived-context/*` 已经存在：
-  - `store.ts`
-  - `serializer.ts`
-  - `types.ts`
-  - `index.ts`
-- `src/coding-runner/service.ts` 已经开始生成 `runId` 并在每轮 projection 后写 archive
-- `src/archived-context/archived-context.test.ts` 与 `src/transcript/transcript.test.ts` 当前可跑通
+Current code includes:
 
-这说明 archive layer 不是空设计，代码已经在仓库里了。
+- `src/archived-context/candidates.ts`
+  - builds archive candidates from transcript blocks removed by projection
+  - shares the same static retention limits as transcript projection
+- `src/archived-context/serializer.ts`
+  - serializes archive artifacts as markdown with frontmatter
+- `src/archived-context/store.ts`
+  - writes current-run artifacts under `archived-context/run/{run_id}`
+  - rebuilds dedup state during `init()`
+  - supports current-run substring `search()`
+  - supports `readArtifact()` by artifact id returned from search
+- `src/coding-runner/transcript-runtime.ts`
+  - initializes `ArchiveContextStore`
+  - writes `archiveCandidates` after each coding-turn projection
+- `src/coding-runner/tool-runtime.ts`
+  - exposes `coding_search_archived_context`
+  - exposes `coding_read_archived_context`
 
-## 当前剩余问题
+The old blockers recorded here have been addressed in the current branch:
 
-### 1. `transcript.test.ts` 新增 archive 测试不 typecheck
+- archive projection tests are typecheck-clean
+- `maxCompactedBlocks = 0` no longer classifies the same blocks as both
+  compacted and dropped
+- current archive tests cover the zero-compaction edge
 
-问题位置：
+## Correct Label
 
-- `src/transcript/transcript.test.ts`
+Archive is:
 
-问题本质：
+- current-run recallable archive
+- deterministic filesystem storage
+- bounded by artifact ids and simple substring search
+- useful for recovering context displaced by projection pressure
 
-- 新增 `archiveCandidates` 测试块里的 `baseOpts.runState` 只是残缺对象
-- `projectTranscript()` 现在要求完整 `RunState`
-- `vitest` 会转译执行，所以测试能绿
-- 但 `tsc --noEmit -p tsconfig.json` 会在这些调用点报错
+Archive is not:
 
-这不是已有旧错，而是这波 archive 改动自己带进来的新问题。
+- cross-run long-term memory
+- workspace memory
+- vector search
+- automatic prompt replay
+- automatic promotion source
+- a completed context governor
 
-### 2. `maxCompactedBlocks = 0` 时，projector 会把同一批 block 同时当成 compacted 和 dropped
+## Current Gaps
 
-问题位置：
+- `src/archived-context/types.ts` still contains comments describing V1 as
+  write-only/no retrieval. That wording is stale and should be corrected in a
+  small follow-up.
+- Search is only current-run substring matching.
+- Search does not yet rank by tags, files, task id, or confidence.
+- Recalled archive content needs strong historical/evidence labeling whenever
+  it is inserted into future prompt context.
+- Archive and transcript projection currently duplicate retention defaults.
 
-- `src/transcript/projector.ts`
+## Next Archive-Specific Move
 
-问题本质：
+Do not jump to long-term memory or workspace-memory promotion.
 
-- 当前切分逻辑用了 `slice(-maxCompactedBlocks)`
-- 在 JavaScript 里，`slice(-0)` 等于 `slice(0)`
-- 所以当 `maxCompactedBlocks = 0` 时：
-  - `compactedSourceBlocks` 会拿到整批 `blocksToCompact`
-  - `droppedSourceBlocks` 也会拿到整批 `blocksToCompact`
+Next archive-specific slice:
 
-结果：
+```text
+fix(computer-use-mcp): align archive recall contract and projection retention policy
+```
 
-- 同一批 block 会生成两份 `archiveCandidates`
-- `reason` 分别是 `compacted` 和 `dropped`
-- archive 语义直接打架
+Candidate work:
 
-这不是测试问题，是实际逻辑 bug。
+- update stale archive comments
+- centralize retention policy shared by projection and archive candidate
+  generation
+- keep current-run search/read bounded
+- add tests for search limits, artifact id validation, and historical/evidence
+  labeling
 
-## 为什么现在不该继续做 retrieval
+Non-goals:
 
-原因很简单：
-
-- archive write path 还没收成 typecheck-clean
-- projector 的 zero-value 分支还有逻辑 bug
-
-这时候继续往 retrieval 走，只会把一个没收口的 baseline 继续往上叠，后面更难拆。
-
-## 当前最值得做的事
-
-先把 Archive Layer V1 收成干净 baseline，只做这两件事：
-
-1. 修 `src/transcript/transcript.test.ts` 的 `RunState` 类型问题
-2. 修 `src/transcript/projector.ts` 在 `maxCompactedBlocks = 0` 时的切分逻辑
-
-在这两个问题修完之前，不要继续做：
-
-- retrieval
-- workspace memory promotion
-- GUI
-
-## 当前结论
-
-这条线现在准确的判断应该是：
-
-- **档案层代码已落地**
-- **但 Archive Layer V1 还没收完**
-
-不要把它说成“长期记忆层已成”，也不要把它当成可以继续往 retrieval 开工的稳定基线。
+- no cross-run retrieval
+- no vector index
+- no automatic prompt replay
+- no workspace memory promotion
+- no GUI
