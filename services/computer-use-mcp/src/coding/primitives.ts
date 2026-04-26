@@ -4069,6 +4069,47 @@ export class CodingPrimitives {
     }
 
     if (!currentPlan) {
+      const fallbackFilePath = params.currentFilePath
+        || state.lastTargetSelection?.selectedFile
+        || state.recentEdits.at(-1)?.path
+
+      if (fallbackFilePath) {
+        currentPlan = {
+          maxPlannedFiles: 1,
+          diffBaselineFiles: state.validationBaseline?.baselineDirtyFiles ?? await this.listDiffFiles(state.workspacePath),
+          steps: [{
+            filePath: fallbackFilePath,
+            intent: 'review recent edit',
+            source: 'explicit',
+            status: 'pending',
+            checkpoint: 'validation_required_before_next',
+          }],
+          reason: 'Synthesized minimal review plan from recent edit because no active plan was present.',
+        }
+        this.runtime.stateManager.updateCodingState({
+          currentPlan,
+          ...(!state.lastTargetSelection
+            ? {
+                lastTargetSelection: {
+                  status: 'selected',
+                  selectedFile: fallbackFilePath,
+                  targetKind: this.inferTargetKindFromPath(fallbackFilePath),
+                  architectureLayer: this.inferArchitectureLayerFromPath(fallbackFilePath),
+                  intentDecomposition: this.inferIntentDecomposition('behavior_fix'),
+                  candidates: [],
+                  reason: 'Selected from recent edit for review fallback.',
+                  recommendedNextAction: `Review recently edited file ${fallbackFilePath}.`,
+                  evidenceChain: [`recent_edit:${fallbackFilePath}`],
+                  competition: this.buildTargetCompetitionFromCandidates([]),
+                  changeIntent: 'behavior_fix',
+                } satisfies CodingTargetSelection,
+              }
+            : {}),
+        })
+      }
+    }
+
+    if (!currentPlan) {
       throw new McpError(ErrorCode.InvalidParams, 'No active plan found. Run coding_plan_changes first.')
     }
 

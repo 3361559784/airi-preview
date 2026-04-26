@@ -12,7 +12,6 @@ import { registerComputerUseTools } from '../server/register-tools'
 import { initializeGlobalRegistry } from '../server/tool-descriptors'
 
 const ALLOWED_CODING_TOOLS = [
-  'coding_review_workspace',
   'coding_read_file',
   'coding_search_text',
   'coding_search_symbol',
@@ -22,7 +21,6 @@ const ALLOWED_CODING_TOOLS = [
   'coding_analyze_impact',
   'coding_validate_hypothesis',
   'coding_diagnose_changes',
-  'coding_capture_validation_baseline',
   'coding_review_changes',
   'coding_apply_patch',
   'coding_compress_context',

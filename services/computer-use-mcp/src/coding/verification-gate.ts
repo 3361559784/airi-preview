@@ -81,6 +81,11 @@ const WHITESPACE_RE = /\s+/g
 // NOTICE: This regex catches commands that provide zero verification value.
 // It must be kept in sync with the copy in verification-nudge.ts.
 const OBVIOUS_NOOP_RE = /^(?:echo(?:\s|$)|pwd(?:\s|$)|ls(?:\s|$)|cat(?:\s|$)|true(?:\s|$)|exit\s+0|node\s+-e\s|python[23]?\s+-c\s|printf(?:\s|$))/i
+const PROJECT_LEVEL_VALIDATION_KEYWORD_RE = /\b(?:test|vitest|jest|mocha|ava|pytest|typecheck|lint)\b/
+const GO_TEST_RE = /\bgo test\b/
+const CARGO_TEST_RE = /\bcargo test\b/
+const NODE_CHECK_SCRIPT_RE = /\b(?:node|bun)\s+[\w./-]*check\.(?:mjs|cjs|js|ts)\b/
+const CHECK_SHELL_SCRIPT_RE = /\b[\w./-]*check\.(?:sh|bash)\b/
 
 function normalizeCommand(command?: string) {
   return (command || '').trim().replace(WHITESPACE_RE, ' ').toLowerCase()
@@ -95,6 +100,17 @@ function commandTargetsReviewedFiles(command: string, fileHints: string[]) {
     const normalizedPath = filePath.trim().toLowerCase()
     return Boolean(normalizedPath) && command.includes(normalizedPath)
   })
+}
+
+function isProjectLevelValidationCommand(command: string) {
+  if (!command || OBVIOUS_NOOP_RE.test(command))
+    return false
+
+  return PROJECT_LEVEL_VALIDATION_KEYWORD_RE.test(command)
+    || GO_TEST_RE.test(command)
+    || CARGO_TEST_RE.test(command)
+    || NODE_CHECK_SCRIPT_RE.test(command)
+    || CHECK_SHELL_SCRIPT_RE.test(command)
 }
 
 function hasValidationCommandMismatch(params: {
@@ -126,8 +142,16 @@ function hasValidationCommandMismatch(params: {
     return false
   }
 
+  if (observedCommands.length === 1 && isProjectLevelValidationCommand(observedCommands[0]!)) {
+    return false
+  }
+
   if (!scopedCommand) {
-    return true
+    // A project-level verifier (for example `node check.js` or `pnpm test`)
+    // may not mention the edited file by name. If terminal and review evidence
+    // point at the same non-noop command, do not reject it solely because no
+    // scoped command was resolved.
+    return observedCommands.length !== 1
   }
 
   if (observedCommands.includes(scopedCommand)) {

@@ -1265,6 +1265,44 @@ describe('codingPrimitives', () => {
     expect(review.detectedRisks).not.toContain('patch_verification_mismatch')
   })
 
+  it('reviewChanges synthesizes a minimal plan from recent edits when no active plan exists', async () => {
+    const { runtime } = createRuntime({
+      recentEdits: [{ path: 'src/a.ts', summary: 'edited current file' }],
+      validationBaseline: {
+        capturedAt: new Date().toISOString(),
+        workspacePath: '/mock/workspace/root',
+        baselineDirtyFiles: [],
+        baselineDiffSummary: 'No diff summary available.',
+        baselineFailingChecks: [],
+        baselineSkippedValidations: [],
+        workspaceMetadata: { gitAvailable: false },
+      },
+    }, {
+      lastTerminalResult: {
+        command: 'pnpm test',
+        exitCode: 0,
+        stdout: 'ok',
+        stderr: '',
+        effectiveCwd: '/mock/workspace/root',
+        durationMs: 10,
+        timedOut: false,
+      },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+    vi.spyOn(primitives as any, 'listDiffFiles').mockResolvedValue([])
+    vi.spyOn(primitives as any, 'readDiffStat').mockResolvedValue('')
+
+    const review = await primitives.reviewChanges({})
+
+    expect(review.status).toBe('ready_for_next_file')
+    expect(review.filesReviewed).toEqual(['src/a.ts'])
+    expect(review.detectedRisks).not.toContain('patch_verification_mismatch')
+    expect(runtime.stateManager.getState().coding?.currentPlan).toMatchObject({
+      maxPlannedFiles: 1,
+      steps: [{ filePath: 'src/a.ts', source: 'explicit', status: 'completed' }],
+    })
+  })
+
   it('reviewChanges marks baselineComparison as new_red when failure signature drifts', async () => {
     const { runtime } = createRuntime({
       recentEdits: [{ path: 'src/a.ts', summary: 'edited current file' }],

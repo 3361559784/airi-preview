@@ -199,6 +199,9 @@ describe('codingRunner', () => {
     vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
       // Assert that runner-owned task memory is injected into the system prompt.
       expect(opts.system).toContain('Goal: Complete the task')
+      expect(opts.system).toContain('Workspace root: /test')
+      expect(opts.system).toContain('do not re-review or switch workspace roots')
+      expect(opts.system).toContain('calling coding_review_changes, then calling coding_report_status')
 
       return {
         messages: [
@@ -270,6 +273,57 @@ describe('codingRunner', () => {
         recheckAttempted: false,
       }),
     }))
+  })
+
+  it('runs bounded coding_review_changes recheck when completed report is missing review evidence', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const events: CodingRunnerEventEnvelope[] = []
+    const state = createGateReadyState({
+      coding: {
+        lastChangeReview: undefined,
+      },
+    })
+    mockRuntime.stateManager.getState.mockImplementation(() => state)
+    mockExecuteAction.mockImplementation(async (action: any) => {
+      if (action.kind === 'coding_review_changes') {
+        state.coding.lastChangeReview = {
+          status: 'ready_for_next_file',
+          filesReviewed: ['src/example.ts'],
+          diffSummary: 'ok',
+          validationSummary: 'ok',
+          validationCommand: 'pnpm test',
+          baselineComparison: 'unknown',
+          detectedRisks: [],
+          unresolvedIssues: [],
+          recommendedNextAction: 'report completion',
+        }
+      }
+      return { isError: false, content: [], structuredContent: { status: 'ok', action: action.kind } }
+    })
+    mockGenerateCompletedReport('done after review recheck')
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Complete with missing review',
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(mockExecuteAction).toHaveBeenCalledWith(
+      {
+        kind: 'coding_review_changes',
+        input: {},
+      },
+      'workflow_coding_runner_verification_recheck_review_changes',
+    )
+    expect(mockExecuteAction).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'terminal_exec' }),
+      'workflow_coding_runner_verification_recheck_terminal_exec',
+    )
+    expect(events.filter(event => event.kind === 'verification_gate_evaluated').map(event => (event.payload as any).reasonCode)).toEqual(['review_missing', 'gate_pass'])
   })
 
   it('runs one bounded verification recheck when terminal evidence is missing and completes if recheck passes', async () => {
@@ -814,12 +868,15 @@ describe('codingRunner', () => {
     expect(mockRuntime.taskMemory.get()).toMatchObject({
       status: 'done',
       goal: 'Wire memory',
-      confirmedFacts: ['unit tests passed'],
       artifacts: [
         { label: 'src/a.ts', value: 'src/a.ts', kind: 'file' },
         { label: 'pnpm test', value: 'pnpm test', kind: 'tool' },
       ],
     })
+    expect(mockRuntime.taskMemory.get()?.confirmedFacts).toEqual(expect.arrayContaining([
+      'Workspace root: /test',
+      'unit tests passed',
+    ]))
     expect(mockRuntime.stateManager.updateTaskMemory).toHaveBeenCalled()
   })
 
@@ -908,6 +965,19 @@ describe('codingRunner', () => {
       seq: 1,
       payload: { toolName: 'coding_read_file' },
     })
+  })
+
+  it('does not expose runner-owned bootstrap tools to the xsai model loop', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction)
+    const toolNames = tools.map((toolDef: any) => toolDef.name)
+
+    expect(toolNames).not.toContain('coding_review_workspace')
+    expect(toolNames).not.toContain('coding_capture_validation_baseline')
+    expect(toolNames).toContain('coding_search_text')
+    expect(toolNames).toContain('coding_apply_patch')
+    expect(toolNames).toContain('coding_report_status')
   })
 
   it('adds internal archived-context recall tools when an archive store is provided', async () => {
@@ -1282,11 +1352,66 @@ describe('codingRunner', () => {
     })
 
     const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
-    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Do something' })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Do something', maxSteps: 1 })
 
     expect(result.status).toBe('failed')
     expect(result.turns.length).toBe(1)
     expect(result.turns[0].role).toBe('assistant')
+    expect(result.error).toContain('TEXT_ONLY_FINAL')
+    expect(result.error).not.toContain('BUDGET_EXHAUSTED')
+  })
+
+  it('recovers from text-only assistant output by requiring coding_report_status on the next step', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            { role: 'assistant', content: 'All changes are done and tests pass.' },
+          ],
+        } as any
+      }
+
+      expect(opts.system).toContain('Do not answer with text only. Call coding_report_status')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed', summary: 'reported after text-only recovery' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Recover text-only final' })
+
+    expect(result.status).toBe('completed')
+    expect(result.totalSteps).toBe(2)
+    expect(callCount).toBe(2)
+    expect(mockRuntime.stateManager.updateTaskMemory).toHaveBeenCalledWith(expect.objectContaining({
+      recentFailureReason: expect.stringContaining('text-only response'),
+    }))
   })
 
   it('should abort and return failed if coding_review_workspace fails', async () => {

@@ -11,7 +11,7 @@ import { generateText } from '@xsai/generate-text'
 
 import { evaluateCodingVerificationGate } from '../coding/verification-gate'
 import { createCodingRunnerEventEmitter } from './events'
-import { buildBudgetExhaustedMemory, buildBudgetPressureMemory, buildReportStatusMemory, buildStepMemory, buildTaskStartMemory, buildToolFailureMemory, syncCodingRunnerTaskMemory } from './memory'
+import { buildBudgetExhaustedMemory, buildBudgetPressureMemory, buildReportStatusMemory, buildStepMemory, buildTaskStartMemory, buildTextOnlyReportRequiredMemory, buildToolFailureMemory, syncCodingRunnerTaskMemory } from './memory'
 import { buildXsaiCodingTools } from './tool-runtime'
 import { createTranscriptRuntime, projectForCodingTurn } from './transcript-runtime'
 
@@ -116,7 +116,7 @@ export class CodingRunnerImpl implements CodingRunner {
       runId,
       source: 'task-start',
       sourceIndex: 0,
-      extraction: buildTaskStartMemory(taskGoal),
+      extraction: buildTaskStartMemory(taskGoal, workspacePath),
     })
 
     await transcriptStore.appendUser(taskGoal)
@@ -312,10 +312,25 @@ export class CodingRunnerImpl implements CodingRunner {
 
         // Stop condition: assistant gives text without tool_calls
         if (messages.length > 0 && messages.at(-1).role !== 'tool') {
-          // If we exit on text-only without a terminal report, it is a failure
-          finalStatus = 'failed'
-          exitReason = 'text_only_failure'
-          break
+          const summary = clampFailureSummary(lastFailureSummary ?? String(turns.at(-1)?.rawText ?? 'text-only assistant response'))
+          if (step + 1 >= actualMaxSteps) {
+            // If the final available step exits on text-only without a terminal report, it is a failure.
+            finalStatus = 'failed'
+            finalError = `TEXT_ONLY_FINAL: coding runner ended without an accepted terminal report.${summary ? ` lastAssistant=${summary}` : ''}`
+            exitReason = 'text_only_failure'
+            break
+          }
+
+          lastFailureSummary = summary
+          syncCodingRunnerTaskMemory({
+            runtime,
+            runId,
+            source: `text-only-report-required-${step + 1}`,
+            sourceIndex: (step + 1) * 10 + 2,
+            extraction: buildTextOnlyReportRequiredMemory(summary ?? 'missing terminal report'),
+          })
+          // Keep the loop alive so the next turn can issue the required report tool call.
+          continue
         }
       }
     }
@@ -516,7 +531,8 @@ async function applyCodingRunnerVerificationGate(params: {
     return { passed: true, decision }
   }
 
-  if (decision.decision !== 'recheck_once') {
+  const shouldAttemptRecheck = shouldAttemptBoundedVerificationRecheck(decision)
+  if (!shouldAttemptRecheck) {
     return { passed: false, decision }
   }
 
@@ -530,6 +546,8 @@ async function applyCodingRunnerVerificationGate(params: {
     runtime: params.runtime,
     executeAction: params.executeAction,
     workspacePath: params.workspacePath,
+    runValidation: decision.decision === 'recheck_once'
+      || !decision.verificationEvidenceSummary.hasTerminalResult,
   })
 
   await params.events.emit('verification_recheck_completed', {
@@ -570,6 +588,11 @@ async function applyCodingRunnerVerificationGate(params: {
   }
 }
 
+function shouldAttemptBoundedVerificationRecheck(decision: CodingVerificationGateDecision): boolean {
+  return decision.decision === 'recheck_once'
+    || decision.reasonCode === 'review_missing'
+}
+
 function isBoundedRecheckActionExecuted(result: CallToolResult) {
   if (result.isError === true)
     return false
@@ -585,6 +608,7 @@ async function runBoundedCodingRunnerVerificationRecheck(params: {
   runtime: CodingRunnerDependencies['runtime']
   executeAction: CodingRunnerDependencies['executeAction']
   workspacePath: string
+  runValidation: boolean
 }): Promise<{ succeeded: boolean, explanation: string }> {
   try {
     const codingState = params.runtime.stateManager.getState().coding
@@ -600,19 +624,21 @@ async function runBoundedCodingRunnerVerificationRecheck(params: {
       || codingState.workspacePath
       || params.workspacePath
 
-    const validationResult = await params.executeAction({
-      kind: 'terminal_exec',
-      input: {
-        command: 'auto',
-        cwd: recheckCwd,
-        timeoutMs: 60_000,
-      },
-    }, 'workflow_coding_runner_verification_recheck_terminal_exec')
+    if (params.runValidation) {
+      const validationResult = await params.executeAction({
+        kind: 'terminal_exec',
+        input: {
+          command: 'auto',
+          cwd: recheckCwd,
+          timeoutMs: 60_000,
+        },
+      }, 'workflow_coding_runner_verification_recheck_terminal_exec')
 
-    if (!isBoundedRecheckActionExecuted(validationResult)) {
-      return {
-        succeeded: false,
-        explanation: 'bounded verification recheck failed while executing auto validation command.',
+      if (!isBoundedRecheckActionExecuted(validationResult)) {
+        return {
+          succeeded: false,
+          explanation: 'bounded verification recheck failed while executing auto validation command.',
+        }
       }
     }
 
@@ -630,7 +656,9 @@ async function runBoundedCodingRunnerVerificationRecheck(params: {
 
     return {
       succeeded: true,
-      explanation: 'bounded verification recheck executed auto validation and coding_review_changes.',
+      explanation: params.runValidation
+        ? 'bounded verification recheck executed auto validation and coding_review_changes.'
+        : 'bounded verification recheck executed coding_review_changes.',
     }
   }
   catch (err: unknown) {

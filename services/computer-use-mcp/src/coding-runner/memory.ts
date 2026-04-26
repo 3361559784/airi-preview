@@ -17,12 +17,20 @@ export function syncCodingRunnerTaskMemory(params: {
     params.runtime.stateManager.updateTaskMemory(result.taskMemory)
 }
 
-export function buildTaskStartMemory(taskGoal: string): TaskMemoryExtraction {
+export function buildTaskStartMemory(taskGoal: string, workspacePath: string): TaskMemoryExtraction {
   return {
     status: 'active',
     goal: taskGoal,
+    confirmedFacts: [
+      `Workspace root: ${workspacePath}`,
+      'coding_review_workspace and coding_capture_validation_baseline already completed before the model loop.',
+    ],
     currentStep: 'Bootstrap and inspect workspace',
-    nextStep: 'Run deterministic coding preflight checks',
+    completionCriteria: [
+      'For edit tasks, complete by applying changes with coding_apply_patch, running a relevant validation command, calling coding_review_changes, then calling coding_report_status.',
+      'Do not call coding_report_status(completed) until validation and coding_review_changes both support completion.',
+    ],
+    nextStep: 'Use coding search/read/edit tools inside the reviewed workspace; do not re-review or switch workspace roots.',
   }
 }
 
@@ -81,6 +89,16 @@ export function buildToolFailureMemory(params: {
     currentStep: `Recover from failed ${params.toolName}`,
     recentFailureReason: reason,
     nextStep: 'Use the failure details to adjust the next action instead of repeating the same call.',
+  }
+}
+
+export function buildTextOnlyReportRequiredMemory(summary: string): TaskMemoryExtraction {
+  const reason = `Assistant produced a text-only response instead of calling coding_report_status: ${summary}`.slice(0, 800)
+  return {
+    status: 'active',
+    currentStep: 'Recover from missing terminal report',
+    recentFailureReason: reason,
+    nextStep: 'Do not answer with text only. Call coding_report_status(completed) if runtime evidence supports completion; otherwise call coding_report_status(failed) or coding_report_status(blocked).',
   }
 }
 

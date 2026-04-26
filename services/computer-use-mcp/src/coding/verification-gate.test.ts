@@ -343,6 +343,96 @@ describe('coding verification gate', () => {
     expect(decision.reasonCode).toBe('gate_pass')
   })
 
+  it('accepts aligned project-level validation command even when scoped command is missing', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createCodingState({
+        lastScopedValidationCommand: undefined,
+        lastChangeReview: {
+          status: 'ready_for_next_file',
+          filesReviewed: ['index.ts'],
+          diffSummary: 'ok',
+          validationSummary: 'node check.js passed',
+          validationCommand: 'node check.js',
+          baselineComparison: 'unknown',
+          detectedRisks: [],
+          unresolvedIssues: [],
+          recommendedNextAction: 'done',
+        },
+      }),
+      workflowKind: 'coding_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'node check.js',
+        terminalExitCode: 0,
+      },
+    })
+
+    expect(decision.decision).toBe('pass')
+    expect(decision.reasonCode).toBe('gate_pass')
+  })
+
+  it('accepts aligned project-level validation command even when a scoped suggestion exists', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createCodingState({
+        lastScopedValidationCommand: {
+          command: 'pnpm exec eslint "index.ts"',
+          scope: 'file',
+          filePath: 'index.ts',
+          reason: 'fallback scoped validation suggestion',
+          resolvedAt: new Date().toISOString(),
+        },
+        lastChangeReview: {
+          status: 'ready_for_next_file',
+          filesReviewed: ['index.ts'],
+          diffSummary: 'ok',
+          validationSummary: 'node check.js passed',
+          validationCommand: 'node check.js',
+          baselineComparison: 'unknown',
+          detectedRisks: [],
+          unresolvedIssues: [],
+          recommendedNextAction: 'done',
+        },
+      }),
+      workflowKind: 'coding_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'node check.js',
+        terminalExitCode: 0,
+      },
+    })
+
+    expect(decision.decision).toBe('pass')
+    expect(decision.reasonCode).toBe('gate_pass')
+  })
+
+  it('rejects divergent validation commands when scoped command is missing', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createCodingState({
+        lastScopedValidationCommand: undefined,
+        lastChangeReview: {
+          status: 'ready_for_next_file',
+          filesReviewed: ['index.ts'],
+          diffSummary: 'ok',
+          validationSummary: 'different command passed',
+          validationCommand: 'node check.js',
+          baselineComparison: 'unknown',
+          detectedRisks: [],
+          unresolvedIssues: [],
+          recommendedNextAction: 'done',
+        },
+      }),
+      workflowKind: 'coding_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'pnpm test',
+        terminalExitCode: 0,
+      },
+    })
+
+    expect(decision.decision).toBe('recheck_once')
+    expect(decision.reasonCode).toBe('validation_command_mismatch')
+  })
+
   it('treats patch_verification_mismatch as recheck-ineligible hard failure', () => {
     const decision = evaluateCodingVerificationGate({
       codingState: createCodingState({
