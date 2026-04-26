@@ -1,3 +1,7 @@
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+
+import type { CodingVerificationGateDecision } from '../coding/verification-gate'
+import type { CodingRunnerEventEmitter } from './events'
 import type { CodingRunner, CodingRunnerConfig, CodingRunnerDependencies, CodingRunnerResult, CodingRunnerTurnResult, RunCodingTaskParams } from './types'
 
 import { randomUUID } from 'node:crypto'
@@ -5,6 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { errorMessageFrom } from '@moeru/std'
 import { generateText } from '@xsai/generate-text'
 
+import { evaluateCodingVerificationGate } from '../coding/verification-gate'
 import { createCodingRunnerEventEmitter } from './events'
 import { buildReportStatusMemory, buildStepMemory, buildTaskStartMemory, buildToolFailureMemory, syncCodingRunnerTaskMemory } from './memory'
 import { buildXsaiCodingTools } from './tool-runtime'
@@ -116,6 +121,7 @@ export class CodingRunnerImpl implements CodingRunner {
 
     let totalSteps = 0
     let finalStatus: CodingRunnerResult['status'] = 'timeout'
+    let finalError: string | undefined
     const turns: CodingRunnerTurnResult[] = []
 
     try {
@@ -238,7 +244,39 @@ export class CodingRunnerImpl implements CodingRunner {
                   status: reportStatus,
                   summary: stringValue(reportArgs.summary),
                 })
-                finalStatus = reportStatus === 'completed' ? 'completed' : 'failed'
+                if (reportStatus === 'completed') {
+                  const gateOutcome = await applyCodingRunnerVerificationGate({
+                    runtime,
+                    executeAction,
+                    workspacePath,
+                    events,
+                    reportedStatus: reportStatus,
+                  })
+
+                  if (gateOutcome.passed) {
+                    finalStatus = 'completed'
+                  }
+                  else {
+                    finalStatus = 'failed'
+                    finalError = buildVerificationGateFailureMessage(
+                      gateOutcome.decision,
+                      'recheckExplanation' in gateOutcome ? gateOutcome.recheckExplanation : undefined,
+                    )
+                    syncCodingRunnerTaskMemory({
+                      runtime,
+                      runId,
+                      source: `verification-gate-${step + 1}`,
+                      sourceIndex: (step + 1) * 10 + 2,
+                      extraction: buildToolFailureMemory({
+                        toolName: 'coding_report_status',
+                        summary: finalError,
+                      }),
+                    })
+                  }
+                }
+                else {
+                  finalStatus = 'failed'
+                }
                 break
               }
             }
@@ -281,6 +319,7 @@ export class CodingRunnerImpl implements CodingRunner {
         workspaceMemoryContext: workspaceMemoryStore.toContextString(taskGoal),
       }).metadata,
       turns,
+      error: finalError,
     })
   }
 }
@@ -336,4 +375,200 @@ function parseToolFailureSummary(parsed: unknown): string | undefined {
     return backend.error.trim().slice(0, 500)
 
   return undefined
+}
+
+function getCodingGateTerminalEvidence(runtime: CodingRunnerDependencies['runtime']) {
+  const state = runtime.stateManager.getState()
+  return {
+    hasTerminalResult: Boolean(state.lastTerminalResult),
+    terminalCommand: state.lastTerminalResult?.command,
+    terminalExitCode: state.lastTerminalResult?.exitCode,
+  }
+}
+
+function gateDecisionFinalStatus(decision: CodingVerificationGateDecision): 'completed' | 'failed' {
+  return decision.decision === 'pass' ? 'completed' : 'failed'
+}
+
+async function emitVerificationGateDecision(params: {
+  events: CodingRunnerEventEmitter
+  reportedStatus: 'completed' | 'failed' | 'blocked'
+  decision: CodingVerificationGateDecision
+  recheckAttempted: boolean
+}) {
+  await params.events.emit('verification_gate_evaluated', {
+    reportedStatus: params.reportedStatus,
+    gateDecision: params.decision.decision,
+    reasonCode: params.decision.reasonCode,
+    runnerFinalStatus: gateDecisionFinalStatus(params.decision),
+    explanation: params.decision.explanation,
+    recheckAttempted: params.recheckAttempted,
+  })
+}
+
+async function applyCodingRunnerVerificationGate(params: {
+  runtime: CodingRunnerDependencies['runtime']
+  executeAction: CodingRunnerDependencies['executeAction']
+  workspacePath: string
+  events: CodingRunnerEventEmitter
+  reportedStatus: 'completed'
+}): Promise<{
+  passed: true
+  decision: CodingVerificationGateDecision
+} | {
+  passed: false
+  decision: CodingVerificationGateDecision
+  recheckExplanation?: string
+}> {
+  let decision = evaluateCodingVerificationGate({
+    codingState: params.runtime.stateManager.getState().coding,
+    workflowKind: 'coding_agentic_loop',
+    terminalEvidence: getCodingGateTerminalEvidence(params.runtime),
+  })
+
+  await emitVerificationGateDecision({
+    events: params.events,
+    reportedStatus: params.reportedStatus,
+    decision,
+    recheckAttempted: false,
+  })
+
+  if (decision.decision === 'pass') {
+    return { passed: true, decision }
+  }
+
+  if (decision.decision !== 'recheck_once') {
+    return { passed: false, decision }
+  }
+
+  await params.events.emit('verification_recheck_started', {
+    reportedStatus: params.reportedStatus,
+    reasonCode: decision.reasonCode,
+    explanation: decision.explanation,
+  })
+
+  const recheck = await runBoundedCodingRunnerVerificationRecheck({
+    runtime: params.runtime,
+    executeAction: params.executeAction,
+    workspacePath: params.workspacePath,
+  })
+
+  await params.events.emit('verification_recheck_completed', {
+    ok: recheck.succeeded,
+    explanation: recheck.explanation,
+  })
+
+  if (!recheck.succeeded) {
+    return {
+      passed: false,
+      decision,
+      recheckExplanation: recheck.explanation,
+    }
+  }
+
+  decision = evaluateCodingVerificationGate({
+    codingState: params.runtime.stateManager.getState().coding,
+    workflowKind: 'coding_agentic_loop',
+    recheckAttempted: true,
+    terminalEvidence: getCodingGateTerminalEvidence(params.runtime),
+  })
+
+  await emitVerificationGateDecision({
+    events: params.events,
+    reportedStatus: params.reportedStatus,
+    decision,
+    recheckAttempted: true,
+  })
+
+  if (decision.decision === 'pass') {
+    return { passed: true, decision }
+  }
+
+  return {
+    passed: false,
+    decision,
+    recheckExplanation: recheck.explanation,
+  }
+}
+
+function isBoundedRecheckActionExecuted(result: CallToolResult) {
+  if (result.isError === true)
+    return false
+
+  const structured = result.structuredContent as Record<string, unknown> | undefined
+  if (!structured || typeof structured.status !== 'string')
+    return true
+
+  return structured.status === 'executed' || structured.status === 'ok'
+}
+
+async function runBoundedCodingRunnerVerificationRecheck(params: {
+  runtime: CodingRunnerDependencies['runtime']
+  executeAction: CodingRunnerDependencies['executeAction']
+  workspacePath: string
+}): Promise<{ succeeded: boolean, explanation: string }> {
+  try {
+    const codingState = params.runtime.stateManager.getState().coding
+    if (!codingState?.workspacePath) {
+      return {
+        succeeded: false,
+        explanation: 'bounded verification recheck aborted: coding workspace context is unavailable.',
+      }
+    }
+
+    const currentFilePath = codingState.lastTargetSelection?.selectedFile
+    const recheckCwd = codingState.validationBaseline?.workspacePath
+      || codingState.workspacePath
+      || params.workspacePath
+
+    const validationResult = await params.executeAction({
+      kind: 'terminal_exec',
+      input: {
+        command: 'auto',
+        cwd: recheckCwd,
+        timeoutMs: 60_000,
+      },
+    }, 'workflow_coding_runner_verification_recheck_terminal_exec')
+
+    if (!isBoundedRecheckActionExecuted(validationResult)) {
+      return {
+        succeeded: false,
+        explanation: 'bounded verification recheck failed while executing auto validation command.',
+      }
+    }
+
+    const reviewResult = await params.executeAction({
+      kind: 'coding_review_changes',
+      input: currentFilePath ? { currentFilePath } : {},
+    }, 'workflow_coding_runner_verification_recheck_review_changes')
+
+    if (!isBoundedRecheckActionExecuted(reviewResult)) {
+      return {
+        succeeded: false,
+        explanation: 'bounded verification recheck failed while running coding_review_changes.',
+      }
+    }
+
+    return {
+      succeeded: true,
+      explanation: 'bounded verification recheck executed auto validation and coding_review_changes.',
+    }
+  }
+  catch (err: unknown) {
+    return {
+      succeeded: false,
+      explanation: `bounded verification recheck failed: ${errorMessageFrom(err) || String(err)}`,
+    }
+  }
+}
+
+function buildVerificationGateFailureMessage(
+  decision: CodingVerificationGateDecision,
+  recheckExplanation?: string,
+) {
+  return [
+    `Verification Gate blocked completion: ${decision.explanation}`,
+    `reason=${decision.reasonCode}`,
+    recheckExplanation ? `recheck=${recheckExplanation}` : undefined,
+  ].filter(Boolean).join(' ')
 }

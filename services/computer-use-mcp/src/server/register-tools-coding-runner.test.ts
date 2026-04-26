@@ -76,6 +76,44 @@ function makeExecutedResult(action: ActionInvocation): CallToolResult {
   }
 }
 
+function seedPassingVerificationState(runtime: ComputerUseServerRuntime) {
+  runtime.stateManager.updateCodingState({
+    workspacePath: '/tmp/project',
+    gitSummary: 'clean',
+    recentReads: [],
+    recentEdits: [],
+    recentCommandResults: [],
+    recentSearches: [],
+    pendingIssues: [],
+    lastScopedValidationCommand: {
+      command: 'pnpm test',
+      scope: 'workspace',
+      reason: 'test',
+      resolvedAt: '2026-04-26T00:00:00.000Z',
+    },
+    lastChangeReview: {
+      status: 'ready_for_next_file',
+      filesReviewed: ['src/example.ts'],
+      diffSummary: 'ok',
+      validationSummary: 'ok',
+      validationCommand: 'pnpm test',
+      baselineComparison: 'unknown',
+      detectedRisks: [],
+      unresolvedIssues: [],
+      recommendedNextAction: 'report completion',
+    },
+  })
+  runtime.stateManager.updateTerminalResult({
+    command: 'pnpm test',
+    effectiveCwd: '/tmp/project',
+    exitCode: 0,
+    stdout: 'ok',
+    stderr: '',
+    durationMs: 10,
+    timedOut: false,
+  })
+}
+
 describe('registerComputerUseTools: workflow_coding_runner', () => {
   let runtime: ComputerUseServerRuntime
 
@@ -124,6 +162,7 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
       taskMemory: new TaskMemoryManager(),
     } as unknown as ComputerUseServerRuntime
     runtime.coordinator = createRuntimeCoordinator(runtime)
+    seedPassingVerificationState(runtime)
 
     vi.mocked(xsaiGenerate.generateText).mockReset()
     vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => ({
@@ -232,5 +271,61 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
     expect(structured.status).toBe('failed')
     expect(structured.totalSteps).toBe(0)
     expect(structured.lastError).toContain('workspace error mocked')
+  })
+
+  it('returns MCP error when workflow_coding_runner reports completed but verification gate blocks it', async () => {
+    runtime = {
+      ...runtime,
+      stateManager: new RunStateManager(),
+      taskMemory: new TaskMemoryManager(),
+    } as ComputerUseServerRuntime
+    runtime.coordinator = createRuntimeCoordinator(runtime)
+
+    runtime.stateManager.updateCodingState({
+      workspacePath: '/tmp/project',
+      gitSummary: 'clean',
+      recentReads: [],
+      recentEdits: [],
+      recentCommandResults: [],
+      recentSearches: [],
+      pendingIssues: [],
+      lastScopedValidationCommand: {
+        command: 'pnpm test',
+        scope: 'workspace',
+        reason: 'test',
+        resolvedAt: '2026-04-26T00:00:00.000Z',
+      },
+      lastChangeReview: undefined,
+    })
+    runtime.stateManager.updateTerminalResult({
+      command: 'pnpm test',
+      effectiveCwd: '/tmp/project',
+      exitCode: 0,
+      stdout: 'ok',
+      stderr: '',
+      durationMs: 10,
+      timedOut: false,
+    })
+
+    const executeAction = vi.fn<ExecuteAction>(async (action: ActionInvocation) => makeExecutedResult(action))
+    const { server, invoke } = createMockServer()
+
+    registerComputerUseTools({
+      server,
+      runtime,
+      executeAction,
+      enableTestTools: false,
+    })
+
+    const result = await invoke('workflow_coding_runner', {
+      workspacePath: '/tmp/project',
+      taskGoal: 'Refactor test',
+    })
+
+    expect(result.isError).toBe(true)
+    const structured = result.structuredContent as Record<string, any>
+    expect(structured.status).toBe('failed')
+    expect(structured.lastError).toContain('Verification Gate blocked completion')
+    expect(structured.lastError).toContain('reason=review_missing')
   })
 })

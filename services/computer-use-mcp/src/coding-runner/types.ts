@@ -1,3 +1,7 @@
+import type {
+  CodingVerificationGateDecisionKind,
+  CodingVerificationGateReasonCode,
+} from '../coding/verification-gate'
 import type { ExecuteAction } from '../server/action-executor'
 import type { ComputerUseServerRuntime } from '../server/runtime'
 import type { TranscriptProjectionMetadata } from '../transcript/types'
@@ -94,6 +98,23 @@ export type CodingRunnerEventEnvelope
   | RunnerEvent<'report_status', {
     status: 'completed' | 'failed' | 'blocked'
     summary?: string
+  }>
+  | RunnerEvent<'verification_gate_evaluated', {
+    reportedStatus: 'completed' | 'failed' | 'blocked'
+    gateDecision: CodingVerificationGateDecisionKind
+    reasonCode: CodingVerificationGateReasonCode
+    runnerFinalStatus: 'completed' | 'failed'
+    explanation: string
+    recheckAttempted: boolean
+  }>
+  | RunnerEvent<'verification_recheck_started', {
+    reportedStatus: 'completed'
+    reasonCode: CodingVerificationGateReasonCode
+    explanation: string
+  }>
+  | RunnerEvent<'verification_recheck_completed', {
+    ok: boolean
+    explanation: string
   }>
   | RunnerEvent<'run_finished', {
     finalStatus: CodingRunnerResult['status']

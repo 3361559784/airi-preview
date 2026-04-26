@@ -35,6 +35,89 @@ vi.mock('@xsai/tool', async () => {
   }
 })
 
+function createGateReadyState(overrides: Record<string, any> = {}) {
+  const hasTerminalOverride = Object.hasOwn(overrides, 'lastTerminalResult')
+  const coding = {
+    workspacePath: '/test',
+    gitSummary: 'clean',
+    recentReads: [],
+    recentEdits: [],
+    recentCommandResults: [],
+    recentSearches: [],
+    pendingIssues: [],
+    lastScopedValidationCommand: {
+      command: 'pnpm test',
+      scope: 'workspace',
+      reason: 'test',
+      resolvedAt: '2026-04-26T00:00:00.000Z',
+    },
+    lastChangeReview: {
+      status: 'ready_for_next_file',
+      filesReviewed: ['src/example.ts'],
+      diffSummary: 'ok',
+      validationSummary: 'ok',
+      validationCommand: 'pnpm test',
+      baselineComparison: 'unknown',
+      detectedRisks: [],
+      unresolvedIssues: [],
+      recommendedNextAction: 'report completion',
+    },
+    validationBaseline: {
+      workspacePath: '/test',
+      capturedAt: '2026-04-26T00:00:00.000Z',
+      baselineDirtyFiles: [],
+      workspaceMetadata: {
+        sourceWorkspacePath: '/test',
+        worktreePath: '/test',
+      },
+    },
+    ...overrides.coding,
+  }
+
+  return {
+    coding,
+    lastTerminalResult: hasTerminalOverride
+      ? overrides.lastTerminalResult
+      : {
+          command: 'pnpm test',
+          effectiveCwd: '/test',
+          exitCode: 0,
+          stdout: 'ok',
+          stderr: '',
+          durationMs: 10,
+          timedOut: false,
+        },
+    ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== 'coding' && key !== 'lastTerminalResult')),
+  }
+}
+
+function mockGenerateCompletedReport(summary = 'done') {
+  vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => ({
+    messages: [
+      ...opts.messages,
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{
+          id: 'call_report',
+          function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'call_report',
+        content: JSON.stringify({
+          tool: 'coding_report_status',
+          args: { status: 'completed', summary },
+          ok: true,
+          status: 'ok',
+          backend: { status: 'completed' },
+        }),
+      },
+    ],
+  }) as any)
+}
+
 describe('codingRunner', () => {
   const config = {
     model: 'test-model',
@@ -58,7 +141,7 @@ describe('codingRunner', () => {
         sessionRoot: actualSessionRoot,
       },
       stateManager: {
-        getState: vi.fn().mockReturnValue({}),
+        getState: vi.fn().mockReturnValue(createGateReadyState()),
         updateTaskMemory: vi.fn(),
       },
       session: {
@@ -140,6 +223,158 @@ describe('codingRunner', () => {
     expect(result.turns.length).toBeGreaterThan(0)
     expect(result.turns.at(-1)?.toolName).toBe('coding_report_status')
     expect(result.transcriptMetadata).toBeDefined()
+  })
+
+  it('blocks model-reported completion when runtime review evidence is missing', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const events: CodingRunnerEventEnvelope[] = []
+    mockRuntime.stateManager.getState.mockReturnValue(createGateReadyState({
+      coding: {
+        lastChangeReview: undefined,
+      },
+    }))
+    mockGenerateCompletedReport('claimed done')
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Complete without review',
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toContain('Verification Gate blocked completion')
+    expect(result.error).toContain('reason=review_missing')
+    expect(mockRuntime.taskMemory.get()?.recentFailureReason).toContain('Verification Gate blocked completion')
+    expect(events.map(event => event.kind)).toContain('report_status')
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'verification_gate_evaluated',
+      payload: expect.objectContaining({
+        reportedStatus: 'completed',
+        gateDecision: 'needs_follow_up',
+        reasonCode: 'review_missing',
+        runnerFinalStatus: 'failed',
+        recheckAttempted: false,
+      }),
+    }))
+  })
+
+  it('runs one bounded verification recheck when terminal evidence is missing and completes if recheck passes', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const events: CodingRunnerEventEnvelope[] = []
+    const state = createGateReadyState({ lastTerminalResult: undefined })
+    mockRuntime.stateManager.getState.mockImplementation(() => state)
+    mockExecuteAction.mockImplementation(async (action: any) => {
+      if (action.kind === 'terminal_exec') {
+        state.lastTerminalResult = {
+          command: 'pnpm test',
+          effectiveCwd: '/test',
+          exitCode: 0,
+          stdout: 'ok',
+          stderr: '',
+          durationMs: 10,
+          timedOut: false,
+        }
+      }
+      return { isError: false, content: [], structuredContent: { status: 'executed', action: action.kind } }
+    })
+    mockGenerateCompletedReport('done after recheck')
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Complete with recheck',
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(mockExecuteAction).toHaveBeenCalledWith(
+      {
+        kind: 'terminal_exec',
+        input: {
+          command: 'auto',
+          cwd: '/test',
+          timeoutMs: 60_000,
+        },
+      },
+      'workflow_coding_runner_verification_recheck_terminal_exec',
+    )
+    expect(mockExecuteAction).toHaveBeenCalledWith(
+      {
+        kind: 'coding_review_changes',
+        input: {},
+      },
+      'workflow_coding_runner_verification_recheck_review_changes',
+    )
+    expect(events.map(event => event.kind)).toContain('verification_recheck_started')
+    expect(events.map(event => event.kind)).toContain('verification_recheck_completed')
+    expect(events.filter(event => event.kind === 'verification_gate_evaluated').map(event => (event.payload as any).gateDecision)).toEqual(['recheck_once', 'pass'])
+  })
+
+  it('fails when the bounded verification recheck does not produce passing evidence', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const state = createGateReadyState({ lastTerminalResult: undefined })
+    mockRuntime.stateManager.getState.mockImplementation(() => state)
+    mockExecuteAction.mockImplementation(async (action: any) => {
+      if (action.kind === 'terminal_exec') {
+        return { isError: true, content: [{ type: 'text', text: 'auto validation unavailable' }] }
+      }
+      return { isError: false, content: [], structuredContent: { status: 'executed', action: action.kind } }
+    })
+    mockGenerateCompletedReport('done without proof')
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Complete with failed recheck' })
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toContain('bounded verification recheck failed while executing auto validation command')
+    expect(mockRuntime.taskMemory.get()?.recentFailureReason).toContain('bounded verification recheck failed')
+  })
+
+  it('rejects bad-faith terminal evidence before accepting completed status', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager.getState.mockReturnValue(createGateReadyState({
+      lastTerminalResult: {
+        command: 'echo ok',
+        exitCode: 0,
+        stdout: 'ok',
+        stderr: '',
+        durationMs: 1,
+        timedOut: false,
+      },
+    }))
+    mockGenerateCompletedReport('done with echo')
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Complete with no-op validation' })
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toContain('reason=verification_bad_faith')
+  })
+
+  it('rejects completed status when the last validation command exited non-zero', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager.getState.mockReturnValue(createGateReadyState({
+      lastTerminalResult: {
+        command: 'pnpm test',
+        exitCode: 1,
+        stdout: '',
+        stderr: 'failed',
+        durationMs: 10,
+        timedOut: false,
+      },
+    }))
+    mockGenerateCompletedReport('done with failing tests')
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Complete with failing validation' })
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toContain('reason=terminal_exit_nonzero')
   })
 
   it('does not complete when coding_report_status wrapper result is rejected', async () => {
@@ -305,6 +540,7 @@ describe('codingRunner', () => {
       'preflight_completed',
       'step_started',
       'report_status',
+      'verification_gate_evaluated',
       'run_finished',
     ])
     expect(events.at(-1)).toMatchObject({
