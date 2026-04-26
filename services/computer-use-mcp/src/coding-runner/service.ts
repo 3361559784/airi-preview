@@ -22,7 +22,7 @@ export class CodingRunnerImpl implements CodingRunner {
   ) {}
 
   async runCodingTask(params: RunCodingTaskParams): Promise<CodingRunnerResult> {
-    const { workspacePath, taskGoal, maxSteps, stepTimeoutMs } = params
+    const { workspacePath, taskGoal, taskKind = 'edit', maxSteps, stepTimeoutMs } = params
     // V1: task_id = run_id; single task per invocation
     const runId = params.runId ?? randomUUID()
     const taskId = runId
@@ -42,6 +42,7 @@ export class CodingRunnerImpl implements CodingRunner {
     await events.emit('run_started', {
       workspacePath,
       taskGoal,
+      taskKind,
       maxSteps: actualMaxSteps,
       stepTimeoutMs: actualStepTimeoutMs,
     })
@@ -83,6 +84,7 @@ export class CodingRunnerImpl implements CodingRunner {
         error: `Bootstrap Failed: coding_review_workspace returned error.\n\n${JSON.stringify(reviewResult.content)}`,
       })
     }
+    runtime.stateManager.updateCodingState({ taskKind })
 
     // Preflight 2: Capture Validation Baseline
     await events.emit('preflight_started', { name: 'coding_capture_validation_baseline' })

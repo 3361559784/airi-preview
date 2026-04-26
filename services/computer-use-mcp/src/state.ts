@@ -778,6 +778,8 @@ export interface CodingExecutionReport {
   nextStep: string
 }
 
+export type CodingTaskKind = 'edit' | 'analysis_report'
+
 export interface CodingVerificationMemorySeed {
   reasonCodes: string[]
   suggestedValidationCommand?: string
@@ -808,6 +810,7 @@ export interface CodingRoundContext {
 export interface CodingRunState {
   workspacePath: string
   gitSummary: string
+  taskKind?: CodingTaskKind
   recentReads: Array<{ path: string, range?: string }>
   readFileState?: Record<string, { mtimeMs: number, rangeStr: string }>
   recentEdits: Array<{

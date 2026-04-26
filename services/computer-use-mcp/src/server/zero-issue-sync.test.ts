@@ -19,7 +19,16 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
 
     // Simulate a review with hallucinated unresolved issues
     runtime.stateManager.updateCodingState({
+      taskKind: 'analysis_report',
+      recentReads: [{ path: 'src/index.ts', range: 'all' }],
       currentPlanSession: { changeIntent: 'investigation' } as any,
+      lastCompressedContext: {
+        goal: 'Investigate reported issues',
+        filesSummary: 'Read src/index.ts and reviewed the report target.',
+        recentResultSummary: 'No terminal command was required for this non-mutating investigation.',
+        unresolvedIssues: 'Review still contains unresolved issues.',
+        nextStepRecommendation: 'Do not complete until unresolved issues are cleared.',
+      },
       lastChangeReview: {
         status: 'needs_follow_up',
         recommendedNextAction: 'amend',
@@ -47,7 +56,16 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
     const primitives = new CodingPrimitives(runtime)
 
     runtime.stateManager.updateCodingState({
+      taskKind: 'analysis_report',
+      recentReads: [{ path: 'src/index.ts', range: 'all' }],
       currentPlanSession: { changeIntent: 'investigation' } as any,
+      lastCompressedContext: {
+        goal: 'Investigate reported issues',
+        filesSummary: 'Read src/index.ts and reviewed the report target.',
+        recentResultSummary: 'No terminal command was required for this non-mutating investigation.',
+        unresolvedIssues: 'Review still contains unresolved issues.',
+        nextStepRecommendation: 'Continue working on unresolved issues.',
+      },
       lastChangeReview: {
         status: 'needs_follow_up',
         recommendedNextAction: 'amend',
@@ -70,7 +88,16 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
     const primitives = new CodingPrimitives(runtime)
 
     runtime.stateManager.updateCodingState({
+      taskKind: 'analysis_report',
+      recentReads: [{ path: 'src/index.ts', range: 'all' }],
       currentPlanSession: { changeIntent: 'investigation' } as any,
+      lastCompressedContext: {
+        goal: 'Investigate reported issues',
+        filesSummary: 'Read src/index.ts and reviewed the report target.',
+        recentResultSummary: 'No terminal command was required for this non-mutating investigation.',
+        unresolvedIssues: 'No unresolved report blockers found.',
+        nextStepRecommendation: 'Return the completed investigation report.',
+      },
       lastChangeReview: {
         status: 'ready_for_next_file',
         recommendedNextAction: 'continue',
@@ -85,7 +112,14 @@ describe('zero-Issue Sync (reportStatus lock)', () => {
     })
 
     // Reporting completed should succeed
-    const result = await primitives.reportStatus('completed', 'All good', [], [], [], 'done')
+    const result = await primitives.reportStatus(
+      'completed',
+      'Investigation completed with source-backed report evidence.',
+      [],
+      [],
+      [],
+      'done',
+    )
     expect(result.status).toBe('completed')
   })
 })

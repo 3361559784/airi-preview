@@ -70,6 +70,10 @@ import {
   validatePlanGraphInvariants,
 } from './planner-graph'
 import {
+  evaluateReportOnlyCompletionEvidence,
+  isReportOnlyCodingTask,
+} from './report-completion-evidence'
+import {
   buildEvidencePreview,
   executeSearchPlan,
 } from './retrieval'
@@ -5507,41 +5511,6 @@ export class CodingPrimitives {
       ? this.inferAutoReportStatus()
       : status
     const actualFilesTouched = this.resolveReportTouchedFiles(filesTouched || [], state)
-
-    if (actualStatus === 'completed') {
-      const unverifiedFiles: string[] = []
-      for (const file of actualFilesTouched) {
-        if (!(await this.hasValidMutationProofForResolvedFile(file, state))) {
-          unverifiedFiles.push(file)
-        }
-      }
-
-      if (unverifiedFiles.length > 0) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Completion Denied: You claimed the task is complete, but the following files lack verifiable mutation proofs (file hash changes or readback verification): ${unverifiedFiles.join(', ')}.\nYou must successfully apply_patch to these files before completing.`,
-        )
-      }
-
-      const mutatingIntents = ['behavior_fix', 'refactor', 'api_change', 'config_change', 'test_fix']
-      const intent = state?.currentPlanSession?.changeIntent
-
-      if (actualFilesTouched.length === 0 && (!intent || mutatingIntents.includes(intent))) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Completion Denied: You claimed the task is complete (or has mutating intent), but no files were reported as touched. You must explicitly list touched files and successfully apply_patch to them before reporting status completed.`,
-        )
-      }
-    }
-
-    // Policy Constraint: Zero-Issue Sync
-    if (actualStatus === 'completed' && state?.lastChangeReview?.unresolvedIssues?.length) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Permission Locked (Zero-Issue Sync): Cannot report status as 'completed'. There are unresolved issues remaining in the last review:\n- ${state.lastChangeReview.unresolvedIssues.join('\n- ')}\nYou MUST resolve these issues before completing the workflow.`,
-      )
-    }
-
     const actualCommandsRun = commandsRun?.length === 1 && commandsRun[0] === 'auto'
       ? ((state?.recentCommandResults || []).map(r => typeof r === 'string' ? r.split('\n')[0] : '') || [])
       : commandsRun || []
@@ -5559,6 +5528,50 @@ export class CodingPrimitives {
     const actualNextStep = nextStep === 'auto'
       ? this.inferAutoReportNextStep(actualStatus)
       : nextStep
+
+    if (actualStatus === 'completed') {
+      const unverifiedFiles: string[] = []
+      for (const file of actualFilesTouched) {
+        if (!(await this.hasValidMutationProofForResolvedFile(file, state))) {
+          unverifiedFiles.push(file)
+        }
+      }
+
+      if (unverifiedFiles.length > 0) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Completion Denied: You claimed the task is complete, but the following files lack verifiable mutation proofs (file hash changes or readback verification): ${unverifiedFiles.join(', ')}.\nYou must successfully apply_patch to these files before completing.`,
+        )
+      }
+
+      if (actualFilesTouched.length === 0 && !isReportOnlyCodingTask(state)) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Completion Denied: You claimed the task is complete (or has mutating intent), but no files were reported as touched. You must explicitly list touched files and successfully apply_patch to them before reporting status completed.`,
+        )
+      }
+
+      // Policy Constraint: Zero-Issue Sync
+      if (state?.lastChangeReview?.unresolvedIssues?.length) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Permission Locked (Zero-Issue Sync): Cannot report status as 'completed'. There are unresolved issues remaining in the last review:\n- ${state.lastChangeReview.unresolvedIssues.join('\n- ')}\nYou MUST resolve these issues before completing the workflow.`,
+        )
+      }
+
+      if (actualFilesTouched.length === 0) {
+        const reportOnlyEvidence = evaluateReportOnlyCompletionEvidence(state, {
+          summary: actualSummary,
+          nextStep: actualNextStep,
+        })
+        if (!reportOnlyEvidence.ok) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Completion Denied: analysis/report-only completion lacks runtime evidence: ${reportOnlyEvidence.issues.join('; ')}. Run coding_read_file/search/analyze/compress_context first and include a substantive report summary before completing.`,
+          )
+        }
+      }
+    }
 
     const lastCodingReport = {
       status: actualStatus,

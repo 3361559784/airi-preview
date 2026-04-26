@@ -4,6 +4,11 @@ import type {
   CodingRunState,
 } from '../state'
 
+import {
+  evaluateReportOnlyCompletionEvidence,
+  isReportOnlyCompletedReport,
+} from './report-completion-evidence'
+
 export type CodingWorkflowGateKind = 'coding_loop' | 'coding_agentic_loop'
 
 export type CodingVerificationGateDecisionKind
@@ -41,6 +46,9 @@ export interface CodingVerificationEvidenceSummary {
   reviewStatus?: CodingChangeReview['status']
   reviewValidationCommand?: string
   diagnosisNextAction?: 'amend' | 'abort' | 'continue'
+  isReportOnlyCompletion: boolean
+  reportOnlyEvidence: string[]
+  reportOnlyEvidenceIssues: string[]
   hasValidationBaseline: boolean
   hasScopedValidationCommand: boolean
   scopedValidationCommand?: string
@@ -202,13 +210,15 @@ export function evaluateCodingVerificationGate(params: {
   const { codingState, workflowKind, recheckAttempted = false, terminalEvidence } = params
   const review = codingState?.lastChangeReview
   const diagnosis = codingState?.lastChangeDiagnosis
+  const reportOnlyEvidence = evaluateReportOnlyCompletionEvidence(codingState)
+  const reportOnlyCompletion = isReportOnlyCompletedReport(codingState)
 
   const hasPendingPlan = hasPendingPlanWork(codingState)
   const hasPendingSession = hasPendingSessionWork(codingState)
   const hasPendingPlannerWork = hasPendingPlan || hasPendingSession
 
   const triggers = new Set(detectTriggers({ codingState, review, diagnosis }))
-  if (!terminalEvidence.hasTerminalResult) {
+  if (!terminalEvidence.hasTerminalResult && !reportOnlyCompletion) {
     triggers.add('no_validation_run')
   }
 
@@ -250,6 +260,9 @@ export function evaluateCodingVerificationGate(params: {
     reviewStatus: review?.status,
     reviewValidationCommand: review?.validationCommand,
     diagnosisNextAction: diagnosis?.nextAction,
+    isReportOnlyCompletion: reportOnlyCompletion,
+    reportOnlyEvidence: reportOnlyEvidence.evidence,
+    reportOnlyEvidenceIssues: reportOnlyEvidence.issues,
     hasValidationBaseline: Boolean(codingState?.validationBaseline),
     hasScopedValidationCommand: Boolean(codingState?.lastScopedValidationCommand),
     scopedValidationCommand: codingState?.lastScopedValidationCommand?.command,
@@ -285,7 +298,7 @@ export function evaluateCodingVerificationGate(params: {
     }
   }
 
-  if (!review) {
+  if (!review && !reportOnlyCompletion) {
     return buildNeedsFollowUpDecision({
       reasonCode: 'review_missing',
       explanation: 'No coding review evidence is available; completion is blocked by verification gate.',
@@ -294,7 +307,16 @@ export function evaluateCodingVerificationGate(params: {
     })
   }
 
-  if (review.status === 'blocked') {
+  if (reportOnlyCompletion && hasPendingPlannerWork) {
+    return buildNeedsFollowUpDecision({
+      reasonCode: 'pending_planner_work',
+      explanation: 'Analysis/report evidence is present, but plan/session still has pending work; completion is not allowed.',
+      evidence,
+      finalReportStatus: 'in_progress',
+    })
+  }
+
+  if (review?.status === 'blocked') {
     return buildNeedsFollowUpDecision({
       reasonCode: 'review_blocked',
       explanation: 'Coding review is blocked; workflow cannot be completed.',
@@ -303,7 +325,7 @@ export function evaluateCodingVerificationGate(params: {
     })
   }
 
-  if (review.status === 'failed') {
+  if (review?.status === 'failed') {
     return buildNeedsFollowUpDecision({
       reasonCode: 'review_failed',
       explanation: 'Coding review failed; workflow cannot be completed.',
@@ -351,7 +373,7 @@ export function evaluateCodingVerificationGate(params: {
   const canRecheck = !recheckAttempted
     && (triggers.has('no_validation_run') || triggers.has('validation_command_mismatch'))
 
-  if (review.status === 'needs_follow_up') {
+  if (review?.status === 'needs_follow_up') {
     if (canRecheck) {
       const reasonCode: CodingVerificationGateReasonCode = triggers.has('no_validation_run')
         ? 'no_validation_run'
@@ -374,7 +396,7 @@ export function evaluateCodingVerificationGate(params: {
     })
   }
 
-  if (review.status === 'ready_for_next_file' && hasPendingPlannerWork) {
+  if (review?.status === 'ready_for_next_file' && hasPendingPlannerWork) {
     return buildNeedsFollowUpDecision({
       reasonCode: 'pending_planner_work',
       explanation: 'Review is ready but plan/session still has pending work; completion is not allowed.',
@@ -406,7 +428,7 @@ export function evaluateCodingVerificationGate(params: {
     })
   }
 
-  if (workflowKind === 'coding_agentic_loop' && diagnosis?.nextAction === 'continue' && review.status !== 'ready_for_next_file') {
+  if (workflowKind === 'coding_agentic_loop' && diagnosis?.nextAction === 'continue' && review?.status !== 'ready_for_next_file') {
     return buildNeedsFollowUpDecision({
       reasonCode: 'review_needs_follow_up',
       explanation: 'Diagnosis suggests continue, but review state is not ready for completion.',
@@ -420,7 +442,9 @@ export function evaluateCodingVerificationGate(params: {
     finalReportStatus: 'completed',
     workflowOutcome: 'completed',
     reasonCode: 'gate_pass',
-    explanation: 'Verification gate passed with sufficient evidence and no pending coding workflow work.',
+    explanation: reportOnlyCompletion
+      ? 'Verification gate passed with runtime analysis/report evidence and no pending coding workflow work.'
+      : 'Verification gate passed with sufficient evidence and no pending coding workflow work.',
     verificationEvidenceSummary: evidence,
   }
 }

@@ -136,12 +136,22 @@ describe('codingRunner', () => {
       createdSessionRoots.push(actualSessionRoot)
 
     const taskMemory = new TaskMemoryManager()
+    let runState = createGateReadyState()
     const mockRuntime = {
       config: {
         sessionRoot: actualSessionRoot,
       },
       stateManager: {
-        getState: vi.fn().mockReturnValue(createGateReadyState()),
+        getState: vi.fn(() => runState),
+        updateCodingState: vi.fn((update: Record<string, any>) => {
+          runState = {
+            ...runState,
+            coding: {
+              ...runState.coding,
+              ...update,
+            },
+          }
+        }),
         updateTaskMemory: vi.fn(),
       },
       session: {
@@ -375,6 +385,91 @@ describe('codingRunner', () => {
 
     expect(result.status).toBe('failed')
     expect(result.error).toContain('reason=terminal_exit_nonzero')
+  })
+
+  it('completes analysis/report-only runs with runtime report evidence without validation recheck', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const events: CodingRunnerEventEnvelope[] = []
+    const state = createGateReadyState({
+      lastTerminalResult: undefined,
+      coding: {
+        taskKind: 'analysis_report',
+        recentReads: [{ path: 'src/example.ts', range: 'all' }],
+        lastScopedValidationCommand: undefined,
+        lastChangeReview: undefined,
+        lastCompressedContext: {
+          goal: 'Explain workspace status',
+          filesSummary: 'Read src/example.ts and summarized the relevant implementation facts.',
+          recentResultSummary: 'No terminal command was required for this non-mutating report.',
+          unresolvedIssues: 'No report blockers found.',
+          nextStepRecommendation: 'Return the report to the caller.',
+        },
+      },
+    })
+    mockRuntime.stateManager.getState.mockImplementation(() => state)
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      state.coding.lastCodingReport = {
+        status: 'completed',
+        summary: 'Workspace analysis completed with source-backed report evidence.',
+        filesTouched: [],
+        commandsRun: [],
+        checks: [],
+        nextStep: 'No code changes required.',
+      }
+
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report_only',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report_only',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: {
+                status: 'completed',
+                summary: 'Workspace analysis completed with source-backed report evidence.',
+              },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Explain the workspace status',
+      taskKind: 'analysis_report',
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(mockExecuteAction).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'terminal_exec' }),
+      'workflow_coding_runner_verification_recheck_terminal_exec',
+    )
+    expect(events.filter(event => event.kind === 'verification_gate_evaluated')).toHaveLength(1)
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'verification_gate_evaluated',
+      payload: expect.objectContaining({
+        gateDecision: 'pass',
+        runnerFinalStatus: 'completed',
+      }),
+    }))
   })
 
   it('does not complete when coding_report_status wrapper result is rejected', async () => {

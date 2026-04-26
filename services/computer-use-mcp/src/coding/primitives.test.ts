@@ -521,6 +521,74 @@ describe('codingPrimitives', () => {
     await expect(primitives.reportStatus('completed', 'sum', [], [], [], 'next')).rejects.toThrow(/no files were reported as touched/)
   })
 
+  it('allows reportStatus(completed) without touched files for analysis/report tasks with runtime evidence', async () => {
+    const { runtime } = createRuntime({
+      taskKind: 'analysis_report',
+      recentReads: [{ path: 'src/example.ts', range: 'all' }],
+      lastCompressedContext: {
+        goal: 'Explain current workspace status',
+        filesSummary: 'Read src/example.ts and confirmed the relevant implementation shape.',
+        recentResultSummary: 'No terminal command was required for this non-mutating report.',
+        unresolvedIssues: 'No unresolved report blockers found.',
+        nextStepRecommendation: 'Return the report to the caller.',
+      },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    const report = await primitives.reportStatus(
+      'completed',
+      'Workspace analysis completed with source-backed report evidence.',
+      [],
+      [],
+      [],
+      'No code changes required.',
+    )
+
+    expect(report.status).toBe('completed')
+    expect(report.filesTouched).toEqual([])
+  })
+
+  it('rejects reportStatus(completed) for analysis/report tasks without structured runtime evidence', async () => {
+    const { runtime } = createRuntime({
+      taskKind: 'analysis_report',
+      recentReads: [{ path: 'src/example.ts', range: 'all' }],
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus(
+      'completed',
+      'Workspace analysis completed with source-backed report evidence.',
+      [],
+      [],
+      [],
+      'No code changes required.',
+    )).rejects.toThrow(/analysis\/report-only completion lacks runtime evidence/)
+  })
+
+  it('does not let report artifacts bypass edit-task mutation proof requirements', async () => {
+    const { runtime } = createRuntime({
+      taskKind: 'edit',
+      recentReads: [{ path: 'src/example.ts', range: 'all' }],
+      lastCompressedContext: {
+        goal: 'Fix src/example.ts',
+        filesSummary: 'Read src/example.ts.',
+        recentResultSummary: 'No command was run.',
+        unresolvedIssues: 'No report blockers found.',
+        nextStepRecommendation: 'Apply the required edit.',
+      },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus(
+      'completed',
+      'The edit task claims completion without applying a mutation.',
+      [],
+      [],
+      [],
+      'No code changes required.',
+    )).rejects.toThrow(/no files were reported as touched/)
+  })
+
   it('rejects reportStatus(completed) if old mutationProof from different session is presented instead of new proof', async () => {
     const { runtime } = createRuntime({
       recentEdits: [{

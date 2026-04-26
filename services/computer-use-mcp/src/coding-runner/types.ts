@@ -4,6 +4,7 @@ import type {
 } from '../coding/verification-gate'
 import type { ExecuteAction } from '../server/action-executor'
 import type { ComputerUseServerRuntime } from '../server/runtime'
+import type { CodingTaskKind } from '../state'
 import type { TranscriptProjectionMetadata } from '../transcript/types'
 
 export interface CodingRunnerConfig {
@@ -24,6 +25,7 @@ export interface CodingRunnerDependencies {
 export interface RunCodingTaskParams {
   workspacePath: string
   taskGoal: string
+  taskKind?: CodingTaskKind
   maxSteps?: number
   stepTimeoutMs?: number
   /**
@@ -62,6 +64,7 @@ export type CodingRunnerEventEnvelope
   = | RunnerEvent<'run_started', {
     workspacePath: string
     taskGoal: string
+    taskKind: CodingTaskKind
     maxSteps: number
     stepTimeoutMs: number
   }>

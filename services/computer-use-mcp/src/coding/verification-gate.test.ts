@@ -34,6 +34,31 @@ function createCodingState(overrides?: Partial<CodingRunState>): CodingRunState 
   }
 }
 
+function createReportOnlyCodingState(overrides?: Partial<CodingRunState>): CodingRunState {
+  return createCodingState({
+    taskKind: 'analysis_report',
+    recentReads: [{ path: 'src/example.ts', range: 'all' }],
+    lastScopedValidationCommand: undefined,
+    lastChangeReview: undefined,
+    lastCompressedContext: {
+      goal: 'Explain workspace status',
+      filesSummary: 'Read src/example.ts and summarized the relevant implementation facts.',
+      recentResultSummary: 'No terminal command was required for this non-mutating report.',
+      unresolvedIssues: 'No report blockers found.',
+      nextStepRecommendation: 'Return the report to the caller.',
+    },
+    lastCodingReport: {
+      status: 'completed',
+      summary: 'Workspace analysis completed with source-backed report evidence.',
+      filesTouched: [],
+      commandsRun: [],
+      checks: [],
+      nextStep: 'No code changes required.',
+    },
+    ...overrides,
+  })
+}
+
 describe('coding verification gate', () => {
   it('passes when review is ready, validation evidence exists, and no pending plan/session work', () => {
     const decision = evaluateCodingVerificationGate({
@@ -147,6 +172,43 @@ describe('coding verification gate', () => {
 
     expect(decision.decision).toBe('needs_follow_up')
     expect(decision.reasonCode).toBe('review_missing')
+    expect(decision.workflowOutcome).toBe('failed')
+  })
+
+  it('passes report-only completion with structured analysis evidence and no terminal validation', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createReportOnlyCodingState(),
+      workflowKind: 'coding_agentic_loop',
+      terminalEvidence: {
+        hasTerminalResult: false,
+      },
+    })
+
+    expect(decision.decision).toBe('pass')
+    expect(decision.workflowOutcome).toBe('completed')
+    expect(decision.verificationEvidenceSummary.isReportOnlyCompletion).toBe(true)
+    expect(decision.verificationEvidenceSummary.reportOnlyEvidence).toContain('compressed_context')
+    expect(decision.verificationEvidenceSummary.matchedTriggers).not.toContain('no_validation_run')
+  })
+
+  it('does not let report-only evidence complete while plan work is still pending', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createReportOnlyCodingState({
+        currentPlan: {
+          maxPlannedFiles: 1,
+          diffBaselineFiles: [],
+          steps: [{ filePath: 'src/example.ts', intent: 'behavior_fix', source: 'explicit', status: 'pending' }],
+          reason: 'pending edit plan',
+        },
+      }),
+      workflowKind: 'coding_agentic_loop',
+      terminalEvidence: {
+        hasTerminalResult: false,
+      },
+    })
+
+    expect(decision.decision).toBe('needs_follow_up')
+    expect(decision.reasonCode).toBe('pending_planner_work')
     expect(decision.workflowOutcome).toBe('failed')
   })
 

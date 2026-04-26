@@ -2244,11 +2244,12 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
     schema: {
       workspacePath: z.string().min(1).describe('Absolute path to the workspace root.'),
       taskGoal: z.string().min(1).describe('High-level description of the coding task to accomplish.'),
+      taskKind: z.enum(['edit', 'analysis_report']).optional().describe('Completion discipline for this run. Use analysis_report only for non-mutating inspection/report tasks.'),
       maxSteps: z.number().int().min(1).optional().describe('Optional step limit.'),
       stepTimeoutMs: z.number().int().min(1000).optional().describe('Optional turn timeout.'),
     },
 
-    handler: async ({ workspacePath, taskGoal, maxSteps, stepTimeoutMs }) => {
+    handler: async ({ workspacePath, taskGoal, taskKind, maxSteps, stepTimeoutMs }) => {
       // Create isolated runner configuration
       const config = createDefaultCodingRunnerConfig()
 
@@ -2258,7 +2259,7 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
       })
 
       // The runner executes its isolated projection mapping internally using transcript v1.
-      const result = await runner.runCodingTask({ workspacePath, taskGoal, maxSteps, stepTimeoutMs })
+      const result = await runner.runCodingTask({ workspacePath, taskGoal, taskKind, maxSteps, stepTimeoutMs })
 
       let summary = ''
       if (result.turns.length > 0) {
