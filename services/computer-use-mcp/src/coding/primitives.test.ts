@@ -1,6 +1,8 @@
 import child_process from 'node:child_process'
 import fs from 'node:fs/promises'
 
+import * as crypto from 'node:crypto'
+
 import { McpError } from '@modelcontextprotocol/sdk/types.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -14,6 +16,35 @@ vi.mock('node:child_process')
 
 describe('codingPrimitives', () => {
   const mockConfig = { workspaceRoot: '/mock/workspace/root' }
+
+  function sha256(value: string) {
+    return crypto.createHash('sha256').update(value).digest('hex')
+  }
+
+  function mutationProofForCurrentContent(currentContent: string, sessionId?: string) {
+    return {
+      beforeHash: sha256(`before:${currentContent}`),
+      afterHash: sha256(currentContent),
+      matchedOldString: 'before',
+      occurrencesMatched: 1,
+      readbackVerified: true,
+      ...(sessionId ? { sessionId } : {}),
+    }
+  }
+
+  function mockCurrentFiles(contentsByRelativePath: Record<string, string>) {
+    vi.mocked(fs.readFile).mockImplementation(async (filePath: any) => {
+      const absolute = String(filePath)
+      const prefix = `${mockConfig.workspaceRoot}/`
+      const relativePath = absolute.startsWith(prefix)
+        ? absolute.slice(prefix.length)
+        : absolute
+      const content = contentsByRelativePath[relativePath]
+      if (content === undefined)
+        throw new Error(`Missing mocked file content for ${relativePath}`)
+      return content
+    })
+  }
 
   function createRuntime(initialCodingState: Record<string, any> = {}, extras: Record<string, any> = {}) {
     let codingState: Record<string, any> = {
@@ -288,9 +319,11 @@ describe('codingPrimitives', () => {
   })
 
   it('reportStatus can map "auto" strings into deterministic report fields', async () => {
+    const currentContent = 'export const value = 2\n'
+    mockCurrentFiles({ 'test.ts': currentContent })
     const { runtime } = createRuntime({
       recentReads: [{ path: 'test.ts', range: 'all' }],
-      recentEdits: [{ path: 'test.ts', summary: 'test', mutationProof: { beforeHash: 'x', afterHash: 'y', readbackVerified: true } }],
+      recentEdits: [{ path: 'test.ts', summary: 'test', mutationProof: mutationProofForCurrentContent(currentContent) }],
       recentCommandResults: ['Command: tests\nExit Code: 0\nStdout: ok\nStderr: none'],
       currentPlanSession: {
         maxPlannedFiles: 1,
@@ -335,6 +368,117 @@ describe('codingPrimitives', () => {
     expect(report.filesTouched).toContain('test.ts')
     expect(report.commandsRun[0]).toContain('Command: tests')
     expect(report.nextStep).toContain('All planned files are completed')
+  })
+
+  it('reportStatus(completed) expands auto filesTouched to recent edits and validates current file hash', async () => {
+    const currentContent = 'export const count = 1\n'
+    mockCurrentFiles({ 'test.ts': currentContent })
+    const { runtime } = createRuntime({
+      recentEdits: [{ path: 'test.ts', summary: 'test', mutationProof: mutationProofForCurrentContent(currentContent) }],
+      currentPlanSession: { changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    const report = await primitives.reportStatus('completed', 'sum', ['auto'], [], [], 'next')
+
+    expect(report.status).toBe('completed')
+    expect(report.filesTouched).toEqual(['test.ts'])
+  })
+
+  it('rejects reportStatus(completed) with auto filesTouched when plan candidate has no mutation proof', async () => {
+    const { runtime } = createRuntime({
+      recentEdits: [],
+      currentPlan: {
+        maxPlannedFiles: 1,
+        diffBaselineFiles: [],
+        reason: 'plan',
+        steps: [{ filePath: 'test.ts', intent: 'fix', source: 'target_selection', status: 'completed' }],
+      },
+      currentPlanSession: { changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus('completed', 'sum', ['auto'], [], [], 'next')).rejects.toThrow(/lack verifiable mutation proofs/)
+  })
+
+  it('rejects reportStatus(completed) with auto filesTouched when proof belongs to another session', async () => {
+    const currentContent = 'export const count = 1\n'
+    mockCurrentFiles({ 'test.ts': currentContent })
+    const { runtime } = createRuntime({
+      recentEdits: [{
+        path: 'test.ts',
+        summary: 'test',
+        mutationProof: mutationProofForCurrentContent(currentContent, 'session_old_1'),
+      }],
+      currentPlanSession: { id: 'session_current_2', changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus('completed', 'sum', ['auto'], [], [], 'next')).rejects.toThrow(/lack verifiable mutation proofs/)
+  })
+
+  it('rejects reportStatus(completed) with auto filesTouched when proof hash shows no mutation', async () => {
+    const currentContent = 'export const count = 1\n'
+    const sameHash = sha256(currentContent)
+    const { runtime } = createRuntime({
+      recentEdits: [{
+        path: 'test.ts',
+        summary: 'test',
+        mutationProof: { beforeHash: sameHash, afterHash: sameHash, readbackVerified: true },
+      }],
+      currentPlanSession: { changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus('completed', 'sum', ['auto'], [], [], 'next')).rejects.toThrow(/lack verifiable mutation proofs/)
+  })
+
+  it('rejects reportStatus(completed) with auto filesTouched when readback proof failed', async () => {
+    const currentContent = 'export const count = 1\n'
+    const { runtime } = createRuntime({
+      recentEdits: [{
+        path: 'test.ts',
+        summary: 'test',
+        mutationProof: { ...mutationProofForCurrentContent(currentContent), readbackVerified: false },
+      }],
+      currentPlanSession: { changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus('completed', 'sum', ['auto'], [], [], 'next')).rejects.toThrow(/lack verifiable mutation proofs/)
+  })
+
+  it('rejects reportStatus(completed) when current file no longer matches mutation proof afterHash', async () => {
+    const proofContent = 'export const count = 1\n'
+    mockCurrentFiles({ 'test.ts': 'export const count = 0\n' })
+    const { runtime } = createRuntime({
+      recentEdits: [{ path: 'test.ts', summary: 'test', mutationProof: mutationProofForCurrentContent(proofContent) }],
+      currentPlanSession: { changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    await expect(primitives.reportStatus('completed', 'sum', ['auto'], [], [], 'next')).rejects.toThrow(/lack verifiable mutation proofs/)
+  })
+
+  it('reportStatus(completed) expands, normalizes, and dedupes mixed auto and explicit filesTouched', async () => {
+    const testContent = 'export const testValue = 1\n'
+    const fooContent = 'export const fooValue = 1\n'
+    mockCurrentFiles({
+      'test.ts': testContent,
+      'src/foo.ts': fooContent,
+    })
+    const { runtime } = createRuntime({
+      recentEdits: [
+        { path: 'test.ts', summary: 'test', mutationProof: mutationProofForCurrentContent(testContent) },
+        { path: 'src/foo.ts', summary: 'foo', mutationProof: mutationProofForCurrentContent(fooContent) },
+      ],
+      currentPlanSession: { changeIntent: 'behavior_fix' },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    const report = await primitives.reportStatus('completed', 'sum', ['auto', './src/foo.ts'], [], [], 'next')
+
+    expect(report.filesTouched).toEqual(['src/foo.ts', 'test.ts'])
   })
 
   it('rejects reportStatus(completed) if files lack valid mutation proof', async () => {

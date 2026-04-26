@@ -24,6 +24,7 @@ import type {
   CodingPlanStep,
   CodingReplanDraftInput,
   CodingReviewRisk,
+  CodingRunState,
   CodingScopedValidationCommand,
   CodingTargetCandidate,
   CodingTargetCompetition,
@@ -123,6 +124,79 @@ export class CodingPrimitives {
       .filter(Boolean)
       .slice(0, this.maxAutoArrayLength)
       .map(value => this.clampString(value))
+  }
+
+  private resolveWorkspaceRelativeTarget(filePath: string) {
+    const resolvedFilePath = this.resolveTargetFileInput(filePath)
+    const absPath = this.resolveWorkspacePath(resolvedFilePath)
+    const root = path.resolve(this.getWorkspaceRoot())
+    return path.relative(root, absPath) || '.'
+  }
+
+  private resolveReportFileCandidate(filePath: string, state?: CodingRunState) {
+    const resolvedFilePath = this.resolveTargetFileInput(filePath)
+    if (state?.workspacePath)
+      return this.resolveWorkspaceRelativeTarget(resolvedFilePath)
+
+    const normalized = path.normalize(resolvedFilePath)
+    if (path.isAbsolute(normalized) || normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+      throw new McpError(ErrorCode.InvalidParams, `Access denied. Path ${filePath} is outside of workspace.`)
+    }
+    return normalized
+  }
+
+  private resolveReportTouchedFiles(filesTouched: string[] = [], state?: CodingRunState) {
+    const resolvedFiles = new Set<string>()
+    const addResolved = (filePath?: string) => {
+      const trimmed = filePath?.trim()
+      if (!trimmed || trimmed === 'auto')
+        return
+      resolvedFiles.add(this.resolveReportFileCandidate(trimmed, state))
+    }
+
+    const hasAuto = filesTouched.includes('auto')
+    filesTouched.forEach(addResolved)
+
+    if (hasAuto) {
+      state?.currentPlan?.steps
+        .filter(step => step.status === 'completed')
+        .forEach(step => addResolved(step.filePath))
+      state?.recentEdits.forEach(edit => addResolved(edit.path))
+    }
+
+    return Array.from(resolvedFiles)
+  }
+
+  private findLatestEditForResolvedFile(resolvedFile: string, state?: CodingRunState) {
+    return [...(state?.recentEdits || [])].reverse().find((edit) => {
+      try {
+        return this.resolveReportFileCandidate(edit.path, state) === resolvedFile
+      }
+      catch {
+        return false
+      }
+    })
+  }
+
+  private async hasValidMutationProofForResolvedFile(resolvedFile: string, state?: CodingRunState) {
+    const edit = this.findLatestEditForResolvedFile(resolvedFile, state)
+    const proof = edit?.mutationProof
+    const hasBaseProof = !!(proof && proof.readbackVerified && proof.beforeHash !== proof.afterHash)
+    if (!hasBaseProof)
+      return false
+
+    const currentSessionId = state?.currentPlanSession?.id
+    if (currentSessionId && proof.sessionId !== currentSessionId)
+      return false
+
+    try {
+      const currentContent = await fs.readFile(this.resolveWorkspacePath(resolvedFile), 'utf8')
+      const currentHash = crypto.createHash('sha256').update(currentContent).digest('hex')
+      return currentHash === proof.afterHash
+    }
+    catch {
+      return false
+    }
   }
 
   // NOTICE: Execute retrieval and cache selectedFiles as search matches.
@@ -5432,20 +5506,15 @@ export class CodingPrimitives {
     const actualStatus = status === 'auto'
       ? this.inferAutoReportStatus()
       : status
+    const actualFilesTouched = this.resolveReportTouchedFiles(filesTouched || [], state)
 
     if (actualStatus === 'completed') {
-      const recentEdits = state?.recentEdits || []
-      const unverifiedFiles = (filesTouched || []).filter((file) => {
-        if (file === 'auto')
-          return false
-        const resolvedFile = this.resolveTargetFileInput(file)
-        const edit = [...recentEdits].reverse().find(e => e.path === resolvedFile || this.resolveTargetFileInput(e.path) === resolvedFile)
-        const proof = edit?.mutationProof
-        const hasBaseProof = !!(proof && proof.readbackVerified && proof.beforeHash !== proof.afterHash)
-        const currentSessionId = state?.currentPlanSession?.id
-        const hasSessionMatch = currentSessionId ? proof?.sessionId === currentSessionId : true
-        return !hasBaseProof || !hasSessionMatch
-      })
+      const unverifiedFiles: string[] = []
+      for (const file of actualFilesTouched) {
+        if (!(await this.hasValidMutationProofForResolvedFile(file, state))) {
+          unverifiedFiles.push(file)
+        }
+      }
 
       if (unverifiedFiles.length > 0) {
         throw new McpError(
@@ -5457,7 +5526,7 @@ export class CodingPrimitives {
       const mutatingIntents = ['behavior_fix', 'refactor', 'api_change', 'config_change', 'test_fix']
       const intent = state?.currentPlanSession?.changeIntent
 
-      if ((filesTouched || []).length === 0 && (!intent || mutatingIntents.includes(intent))) {
+      if (actualFilesTouched.length === 0 && (!intent || mutatingIntents.includes(intent))) {
         throw new McpError(
           ErrorCode.InvalidParams,
           `Completion Denied: You claimed the task is complete (or has mutating intent), but no files were reported as touched. You must explicitly list touched files and successfully apply_patch to them before reporting status completed.`,
@@ -5472,12 +5541,6 @@ export class CodingPrimitives {
         `Permission Locked (Zero-Issue Sync): Cannot report status as 'completed'. There are unresolved issues remaining in the last review:\n- ${state.lastChangeReview.unresolvedIssues.join('\n- ')}\nYou MUST resolve these issues before completing the workflow.`,
       )
     }
-
-    const actualFilesTouched = filesTouched?.length === 1 && filesTouched[0] === 'auto'
-      ? (state?.currentPlan?.steps.filter(step => step.status === 'completed').map(step => step.filePath)
-        || (state?.recentEdits || []).map(e => e.path)
-        || [])
-      : filesTouched || []
 
     const actualCommandsRun = commandsRun?.length === 1 && commandsRun[0] === 'auto'
       ? ((state?.recentCommandResults || []).map(r => typeof r === 'string' ? r.split('\n')[0] : '') || [])

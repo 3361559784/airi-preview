@@ -428,6 +428,57 @@ describe('codingRunner', () => {
     expect(events.map(event => event.kind)).not.toContain('report_status')
   })
 
+  it('treats rejected auto filesTouched completion report as tool failure, not completed status', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const events: CodingRunnerEventEnvelope[] = []
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => ({
+      messages: [
+        ...opts.messages,
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_auto_denied',
+            function: { name: 'coding_report_status', arguments: '{"status":"completed","filesTouched":["auto"]}' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_auto_denied',
+          content: JSON.stringify({
+            tool: 'coding_report_status',
+            args: { status: 'completed', filesTouched: ['auto'] },
+            ok: false,
+            status: 'exception',
+            error: 'Completion Denied: auto filesTouched lacks verifiable mutation proofs',
+          }),
+        },
+      ],
+    }) as any)
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Complete with auto proof bypass',
+      maxSteps: 1,
+      runId: 'run-auto-denied-report',
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(result.status).toBe('timeout')
+    expect(result.turns.at(-1)).toMatchObject({
+      role: 'tool',
+      toolName: 'coding_report_status',
+      resultOk: false,
+    })
+    expect(mockRuntime.taskMemory.get()?.recentFailureReason).toContain('auto filesTouched lacks verifiable mutation proofs')
+    expect(events.map(event => event.kind)).not.toContain('report_status')
+    expect(events.map(event => event.kind)).not.toContain('verification_gate_evaluated')
+  })
+
   it('syncs task memory from task start and coding_report_status', async () => {
     const { mockRuntime, mockExecuteAction } = createMockDeps()
 
