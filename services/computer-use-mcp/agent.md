@@ -28,6 +28,53 @@ If a future design choice looks more like "Claude Code shape adoption" than
 "stronger observe -> decide -> act -> verify -> repair behavior", treat that as
 a warning sign and justify it explicitly.
 
+## AI Worker Dispatch Policy
+
+This policy is local to `services/computer-use-mcp/**`. Do not copy it into
+global Codex config or unrelated AIRI workstreams without an explicit decision.
+
+Use GPT-5.5 as the controller. It owns scope, final judgment, code edits,
+verification choices, and whether a finding is real. External AI workers are
+allowed to be used aggressively, but they are evidence-gathering and review
+workers, not authorities.
+
+Default worker posture:
+
+- Use Spark subagents aggressively for fast read-only repo exploration, test
+  discovery, and diff review.
+- Use Copilot CLI aggressively for external read-only plan/review passes.
+- Treat Copilot `gpt-5-mini` and `gpt-4.1` as cheap default workers for
+  high-frequency low-risk scans, sanity checks, and alternate test ideas.
+- Use Copilot `gpt-5.4-mini high` for normal external worker review.
+- Use Copilot `gpt-5.3-codex high` only for harder code-review or implementation
+  reasoning, not routine scans.
+- Use Gemini CLI for broad context review, independent risk checks, and
+  second-opinion architecture/readability passes.
+- If Gemini quota or latency is bad, fall back to Copilot workers.
+
+Recommended dispatch:
+
+- Before a non-trivial implementation: ask one Spark explorer to map local code
+  paths and one Copilot cheap worker to look for obvious missing tests.
+- Before finalizing a risky diff: ask Spark or Copilot for a focused diff review.
+- For larger context/memory/runtime-policy changes: run at least one external
+  second opinion from Copilot or Gemini unless local tests already expose the
+  answer clearly.
+- For tiny, mechanically obvious edits: do not force external workers just to
+  perform ceremony.
+
+Hard boundaries:
+
+- Workers default to read-only. Do not let external workers write files unless
+  the user explicitly asks for that worker to implement.
+- Do not send secrets, API keys, cookies, or private credentials to external
+  tools.
+- Do not trust worker output over repository facts, typecheck, tests, logs, or
+  direct diffs.
+- Do not let worker suggestions expand scope. Unsupported claims are discarded.
+- Do not mix `.codex`, Copilot/Gemini governance, labels, runtime code, and test
+  changes in one commit unless the user explicitly asks for a snapshot commit.
+
 ## Current Status Snapshot
 
 Updated for the current terminal-lane-v2 workstream.
