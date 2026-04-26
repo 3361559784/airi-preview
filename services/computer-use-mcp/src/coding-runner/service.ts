@@ -41,12 +41,18 @@ export class CodingRunnerImpl implements CodingRunner {
       stepTimeoutMs: actualStepTimeoutMs,
     })
 
-    const { store: transcriptStore, archiveStore } = await createTranscriptRuntime(
+    const { store: transcriptStore, archiveStore, workspaceMemoryStore } = await createTranscriptRuntime(
       runtime,
       runId,
+      workspacePath,
       this.deps.useInMemoryTranscript ?? false,
     )
-    const xsaiTools = await buildXsaiCodingTools(runtime, executeAction, { events, archiveStore, runId })
+    const xsaiTools = await buildXsaiCodingTools(runtime, executeAction, {
+      events,
+      archiveStore,
+      runId,
+      workspaceMemoryStore,
+    })
 
     // Preflight 1: Review Workspace
     await events.emit('preflight_started', { name: 'coding_review_workspace' })
@@ -127,7 +133,10 @@ export class CodingRunnerImpl implements CodingRunner {
           extraction: buildStepMemory(step + 1, actualMaxSteps),
         })
 
-        const projection = projectForCodingTurn(transcriptStore, this.config.systemPromptBase, runtime)
+        const workspaceMemoryContext = workspaceMemoryStore.toContextString(taskGoal)
+        const projection = projectForCodingTurn(transcriptStore, this.config.systemPromptBase, runtime, {
+          workspaceMemoryContext,
+        })
         const projectedLength = projection.messages.length
 
         // Write archive candidates from this projection turn (deduped)
@@ -254,7 +263,9 @@ export class CodingRunnerImpl implements CodingRunner {
       runId,
       status: finalStatus,
       totalSteps,
-      transcriptMetadata: projectForCodingTurn(transcriptStore, this.config.systemPromptBase, runtime).metadata,
+      transcriptMetadata: projectForCodingTurn(transcriptStore, this.config.systemPromptBase, runtime, {
+        workspaceMemoryContext: workspaceMemoryStore.toContextString(taskGoal),
+      }).metadata,
       turns,
     })
   }

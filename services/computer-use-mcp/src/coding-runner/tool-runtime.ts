@@ -1,6 +1,7 @@
 import type { ArchiveContextStore } from '../archived-context/store'
 import type { ExecuteAction } from '../server/action-executor'
 import type { ComputerUseServerRuntime } from '../server/runtime'
+import type { WorkspaceMemoryStore } from '../workspace-memory/store'
 import type { CodingRunnerEventEmitter } from './events'
 
 import { errorMessageFrom } from '@moeru/std'
@@ -39,6 +40,7 @@ function compactBackend(name: string, structured: any) {
 export interface BuildXsaiCodingToolsOptions {
   events?: CodingRunnerEventEmitter
   archiveStore?: ArchiveContextStore
+  workspaceMemoryStore?: WorkspaceMemoryStore
   runId?: string
 }
 
@@ -158,6 +160,81 @@ export async function buildXsaiCodingTools(
             status: 'ok',
             summary: content.slice(0, 500),
             backend: { artifactId: input.artifactId, content },
+          }
+        })
+      },
+    }))
+  }
+
+  if (options.workspaceMemoryStore) {
+    xsaiToolPromises.push(xsaiTool({
+      name: 'coding_search_workspace_memory',
+      description: 'Search governed workspace memory. Default search returns only active memory; includeProposed is for reviewing unpromoted proposals.',
+      parameters: z.object({
+        query: z.string().min(1).describe('Keyword, file path, tag, or phrase to search.'),
+        includeProposed: z.boolean().optional().describe('Include proposed, unverified memory entries. Defaults to false.'),
+        limit: z.number().int().min(1).max(10).optional().describe('Maximum number of memory hits to return.'),
+      }),
+      execute: async (input: { query: string, includeProposed?: boolean, limit?: number }) => {
+        return executeInternalTool('coding_search_workspace_memory', input, options.events, async () => {
+          const hits = options.workspaceMemoryStore!.search(input.query, {
+            includeProposed: input.includeProposed,
+            limit: input.limit ?? 5,
+          })
+          return {
+            status: 'ok',
+            summary: `Found ${hits.length} workspace memory hit(s).`,
+            backend: { hits },
+          }
+        })
+      },
+    }))
+
+    xsaiToolPromises.push(xsaiTool({
+      name: 'coding_read_workspace_memory',
+      description: 'Read a governed workspace memory entry by id returned from coding_search_workspace_memory.',
+      parameters: z.object({
+        id: z.string().min(1).describe('Workspace memory entry id.'),
+      }),
+      execute: async (input: { id: string }) => {
+        return executeInternalTool('coding_read_workspace_memory', input, options.events, async () => {
+          const entry = options.workspaceMemoryStore!.read(input.id)
+          if (!entry)
+            throw new Error(`Workspace memory entry not found: ${input.id}`)
+          return {
+            status: 'ok',
+            summary: entry.statement.slice(0, 500),
+            backend: { entry },
+          }
+        })
+      },
+    }))
+
+    xsaiToolPromises.push(xsaiTool({
+      name: 'coding_propose_workspace_memory',
+      description: 'Propose a durable workspace memory entry. Proposals are not injected into prompts until explicitly promoted outside the model loop.',
+      parameters: z.object({
+        kind: z.enum(['constraint', 'fact', 'pitfall', 'command', 'file_note']),
+        statement: z.string().min(1).describe('Concise, stable project knowledge statement.'),
+        evidence: z.string().min(1).describe('Concrete evidence for the statement. Avoid speculation.'),
+        confidence: z.enum(['low', 'medium', 'high']).optional().describe('Confidence in the statement. Defaults to low.'),
+        tags: z.array(z.string()).optional().describe('Search tags.'),
+        relatedFiles: z.array(z.string()).optional().describe('Repo-relative related files.'),
+      }),
+      execute: async (input: {
+        kind: 'constraint' | 'fact' | 'pitfall' | 'command' | 'file_note'
+        statement: string
+        evidence: string
+        confidence?: 'low' | 'medium' | 'high'
+        tags?: string[]
+        relatedFiles?: string[]
+      }) => {
+        return executeInternalTool('coding_propose_workspace_memory', input, options.events, async () => {
+          const entry = await options.workspaceMemoryStore!.propose(input)
+          return {
+            status: 'proposed',
+            summary: `Proposed workspace memory: ${entry.statement}`,
+            backend: { entry },
           }
         })
       },

@@ -1,10 +1,11 @@
 import type { CodingRunnerEventEnvelope } from './types'
 
+import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as xsaiGenerate from '@xsai/generate-text'
 import * as xsaiTool from '@xsai/tool'
@@ -12,6 +13,7 @@ import * as xsaiTool from '@xsai/tool'
 import { ArchiveContextStore } from '../archived-context/store'
 import { TaskMemoryManager } from '../task-memory/manager'
 import { InMemoryTranscriptStore, TranscriptStore } from '../transcript/store'
+import { workspaceKeyFromPath, WorkspaceMemoryStore } from '../workspace-memory/store'
 import { createCodingRunnerEventEmitter } from './events'
 import { createCodingRunner } from './service'
 import { buildXsaiCodingTools } from './tool-runtime'
@@ -43,11 +45,17 @@ describe('codingRunner', () => {
     stepTimeoutMs: 1000,
   }
 
-  const createMockDeps = () => {
+  const createdSessionRoots: string[] = []
+
+  const createMockDeps = (sessionRoot?: string) => {
+    const actualSessionRoot = sessionRoot ?? join(tmpdir(), `coding-runner-test-session-${randomUUID()}`)
+    if (!sessionRoot)
+      createdSessionRoots.push(actualSessionRoot)
+
     const taskMemory = new TaskMemoryManager()
     const mockRuntime = {
       config: {
-        sessionRoot: '/tmp/phony_test_session',
+        sessionRoot: actualSessionRoot,
       },
       stateManager: {
         getState: vi.fn().mockReturnValue({}),
@@ -75,16 +83,20 @@ describe('codingRunner', () => {
     vi.mocked(xsaiTool.tool).mockImplementation((def: any) => Promise.resolve(def))
   })
 
+  afterEach(async () => {
+    await Promise.all(createdSessionRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+  })
+
   it('default transcript runtime returns file-backed TranscriptStore', async () => {
     const { mockRuntime } = createMockDeps()
-    const { store } = await createTranscriptRuntime(mockRuntime, 'test-run-id', false)
+    const { store } = await createTranscriptRuntime(mockRuntime, 'test-run-id', '/test', false)
     expect(store).toBeInstanceOf(TranscriptStore)
     expect(store).not.toBeInstanceOf(InMemoryTranscriptStore)
   })
 
   it('test mode transcript runtime returns InMemoryTranscriptStore', async () => {
     const { mockRuntime } = createMockDeps()
-    const { store } = await createTranscriptRuntime(mockRuntime, 'test-run-id', true)
+    const { store } = await createTranscriptRuntime(mockRuntime, 'test-run-id', '/test', true)
     expect(store).toBeInstanceOf(InMemoryTranscriptStore)
   })
 
@@ -314,6 +326,114 @@ describe('codingRunner', () => {
         'tool_call_started',
         'tool_call_completed',
       ])
+    }
+    finally {
+      await rm(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('adds governed workspace memory tools without promoting proposals into default search', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const tmpRoot = await mkdtemp(join(tmpdir(), 'coding-runner-workspace-memory-tools-'))
+    const workspaceMemoryStore = new WorkspaceMemoryStore(join(tmpRoot, 'workspace-memory.jsonl'), {
+      workspacePath: join(tmpRoot, 'repo'),
+      sourceRunId: 'run-workspace-memory-tools',
+    })
+
+    try {
+      await workspaceMemoryStore.init()
+      const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction, {
+        workspaceMemoryStore,
+        events: createCodingRunnerEventEmitter('run-workspace-memory-tools'),
+      })
+
+      const proposeTool = tools.find((toolDef: any) => toolDef.name === 'coding_propose_workspace_memory')
+      const searchTool = tools.find((toolDef: any) => toolDef.name === 'coding_search_workspace_memory')
+      const readTool = tools.find((toolDef: any) => toolDef.name === 'coding_read_workspace_memory')
+      expect(proposeTool).toBeDefined()
+      expect(searchTool).toBeDefined()
+      expect(readTool).toBeDefined()
+
+      const proposed = JSON.parse(await proposeTool.execute({
+        kind: 'constraint',
+        statement: 'Use pnpm filters for computer-use-mcp tests.',
+        evidence: 'The package has a filtered test target.',
+        confidence: 'medium',
+        tags: ['pnpm'],
+      }))
+
+      expect(proposed.status).toBe('proposed')
+      expect(proposed.backend.entry.status).toBe('proposed')
+
+      const defaultSearch = JSON.parse(await searchTool.execute({ query: 'pnpm' }))
+      expect(defaultSearch.backend.hits).toEqual([])
+
+      const proposedSearch = JSON.parse(await searchTool.execute({ query: 'pnpm', includeProposed: true }))
+      expect(proposedSearch.backend.hits).toHaveLength(1)
+
+      const readResult = JSON.parse(await readTool.execute({ id: proposed.backend.entry.id }))
+      expect(readResult.backend.entry.statement).toContain('pnpm filters')
+    }
+    finally {
+      await rm(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('injects only active workspace memory into the coding turn prompt', async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), 'coding-runner-workspace-memory-prompt-'))
+    const workspacePath = join(tmpRoot, 'repo')
+    const { mockRuntime, mockExecuteAction } = createMockDeps(tmpRoot)
+    const seedStore = new WorkspaceMemoryStore(
+      join(tmpRoot, 'workspace-memory', `${workspaceKeyFromPath(workspacePath)}.jsonl`),
+      { workspacePath, sourceRunId: 'seed-run' },
+    )
+
+    try {
+      await seedStore.init()
+      const active = await seedStore.propose({
+        kind: 'constraint',
+        statement: 'For pnpm test tasks, use the @proj-airi/computer-use-mcp workspace filter.',
+        evidence: 'The package tests are run through pnpm -F @proj-airi/computer-use-mcp test.',
+        confidence: 'high',
+      })
+      await seedStore.updateStatus(active.id, 'active', true)
+      await seedStore.propose({
+        kind: 'pitfall',
+        statement: 'Unpromoted pnpm proposal must not enter the prompt.',
+        evidence: 'This entry is intentionally left proposed.',
+      })
+
+      vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+        expect(opts.system).toContain('【Governed Workspace Memory】')
+        expect(opts.system).toContain('@proj-airi/computer-use-mcp workspace filter')
+        expect(opts.system).not.toContain('Unpromoted pnpm proposal')
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_123',
+                function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_123',
+              content: JSON.stringify({ tool: 'coding_report_status', args: { status: 'completed' }, ok: true, status: 'completed' }),
+            },
+          ],
+        } as any
+      })
+
+      const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+      const result = await runner.runCodingTask({
+        workspacePath,
+        taskGoal: 'Fix pnpm test tasks',
+      })
+
+      expect(result.status).toBe('completed')
     }
     finally {
       await rm(tmpRoot, { recursive: true, force: true })
