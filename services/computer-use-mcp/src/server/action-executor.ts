@@ -682,8 +682,11 @@ export function createExecuteAction(runtime: ComputerUseServerRuntime): ExecuteA
           // Shell command guard: evaluate before execution
           const shellGuard = evaluateShellCommand(terminalExecInput.command)
           if (!shellGuard.allowed) {
+            const guardLabel = shellGuard.code
+              ? `${shellGuard.category}:${shellGuard.code}`
+              : shellGuard.category
             throw new Error(
-              `SHELL_COMMAND_DENIED (${shellGuard.category}): ${shellGuard.reason}${
+              `SHELL_COMMAND_DENIED (${guardLabel}): ${shellGuard.reason}${
                 shellGuard.suggestedAlternative ? ` ${shellGuard.suggestedAlternative}` : ''}`,
             )
           }

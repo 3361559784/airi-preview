@@ -880,6 +880,29 @@ describe('createExecuteAction', () => {
     )
   })
 
+  it('blocks denied terminal_exec commands before terminal runner execution', async () => {
+    const { runtime } = createMockRuntime({
+      configOverrides: { approvalMode: 'never' },
+    })
+
+    const executeAction = createExecuteAction(runtime)
+    const result = await executeAction({
+      kind: 'terminal_exec',
+      input: {
+        command: 'node -e "require(\'fs\').writeFileSync(\'src/a.ts\', \'x\')"',
+        cwd: '/tmp/project',
+      },
+    }, 'terminal_exec')
+
+    expect(result.isError).toBe(true)
+    expect(runtime.terminalRunner.execute).not.toHaveBeenCalled()
+
+    const structuredContent = result.structuredContent as Record<string, any>
+    expect(structuredContent.status).toBe('failed')
+    expect(structuredContent.error).toContain('SHELL_COMMAND_DENIED')
+    expect(structuredContent.error).toContain('inline_interpreter')
+  })
+
   it('coding_apply_patch uses resolved exact paths to fetch mutationProof, avoiding suffix collision', async () => {
     // Setup a state where two files have the same suffix.
     const { runtime } = createMockRuntime({
