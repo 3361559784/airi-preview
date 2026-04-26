@@ -184,13 +184,13 @@ export class CodingRunnerImpl implements CodingRunner {
             let toolName = 'unknown'
             let toolArgs: any
             let resultOk = true
-            let parsedStatus: string | undefined
+            let reportStatus: 'completed' | 'failed' | 'blocked' | undefined
             try {
               const parsed = JSON.parse(lastContent)
               toolName = parsed.tool || 'unknown'
               toolArgs = parsed.args
               resultOk = parsed.ok !== false
-              parsedStatus = parsed.status
+              reportStatus = parseReportStatus(parsed)
             }
             catch {}
 
@@ -203,8 +203,7 @@ export class CodingRunnerImpl implements CodingRunner {
             })
 
             if (toolName === 'coding_report_status') {
-              if (parsedStatus && ['completed', 'failed', 'blocked'].includes(parsedStatus)) {
-                const status = parsedStatus as 'completed' | 'failed' | 'blocked'
+              if (resultOk && reportStatus) {
                 const reportArgs = isRecord(toolArgs) ? toolArgs : {}
                 syncCodingRunnerTaskMemory({
                   runtime,
@@ -212,7 +211,7 @@ export class CodingRunnerImpl implements CodingRunner {
                   source: `report-${step + 1}`,
                   sourceIndex: (step + 1) * 10 + 1,
                   extraction: buildReportStatusMemory({
-                    status,
+                    status: reportStatus,
                     summary: stringValue(reportArgs.summary),
                     filesTouched: stringArrayValue(reportArgs.filesTouched),
                     commandsRun: stringArrayValue(reportArgs.commandsRun),
@@ -221,10 +220,10 @@ export class CodingRunnerImpl implements CodingRunner {
                   }),
                 })
                 await events.emit('report_status', {
-                  status,
+                  status: reportStatus,
                   summary: stringValue(reportArgs.summary),
                 })
-                finalStatus = parsedStatus === 'completed' ? 'completed' : 'failed'
+                finalStatus = reportStatus === 'completed' ? 'completed' : 'failed'
                 break
               }
             }
@@ -288,4 +287,22 @@ function stringArrayValue(value: unknown): string[] | undefined {
     return undefined
   const strings = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
   return strings.length > 0 ? strings : undefined
+}
+
+function parseReportStatus(parsed: unknown): 'completed' | 'failed' | 'blocked' | undefined {
+  if (!isRecord(parsed))
+    return undefined
+
+  const backend = parsed.backend
+  if (isRecord(backend) && isTerminalReportStatus(backend.status))
+    return backend.status
+
+  if (isTerminalReportStatus(parsed.status))
+    return parsed.status
+
+  return undefined
+}
+
+function isTerminalReportStatus(value: unknown): value is 'completed' | 'failed' | 'blocked' {
+  return value === 'completed' || value === 'failed' || value === 'blocked'
 }

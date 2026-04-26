@@ -121,7 +121,13 @@ describe('codingRunner', () => {
           {
             role: 'tool',
             tool_call_id: 'call_123',
-            content: JSON.stringify({ tool: 'coding_report_status', args: { status: 'completed' }, ok: true, status: 'completed' }),
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
           },
         ],
       } as any
@@ -134,6 +140,56 @@ describe('codingRunner', () => {
     expect(result.turns.length).toBeGreaterThan(0)
     expect(result.turns.at(-1)?.toolName).toBe('coding_report_status')
     expect(result.transcriptMetadata).toBeDefined()
+  })
+
+  it('does not complete when coding_report_status wrapper result is rejected', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const events: CodingRunnerEventEnvelope[] = []
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => ({
+      messages: [
+        ...opts.messages,
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_denied',
+            function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_denied',
+          content: JSON.stringify({
+            tool: 'coding_report_status',
+            args: { status: 'completed' },
+            ok: false,
+            status: 'exception',
+            error: 'Completion Denied: missing mutation proof',
+            backend: { status: 'completed' },
+          }),
+        },
+      ],
+    }) as any)
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Complete without proof',
+      maxSteps: 1,
+      runId: 'run-denied-report',
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(result.status).toBe('timeout')
+    expect(result.turns.at(-1)).toMatchObject({
+      role: 'tool',
+      toolName: 'coding_report_status',
+      resultOk: false,
+    })
+    expect(events.map(event => event.kind)).not.toContain('report_status')
   })
 
   it('syncs task memory from task start and coding_report_status', async () => {
