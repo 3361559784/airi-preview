@@ -1,3 +1,4 @@
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 /**
  * MANUAL / GATED EVAL HARNESS — NOT STANDARD CI
  *
@@ -22,7 +23,6 @@
  *   AIRI_AGENT_BASE_URL  — (optional) base URL
  */
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, writeFile } from 'node:fs/promises'
@@ -30,12 +30,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from 'node:process'
 
+import { createExecuteAction } from '../server/action-executor'
 import { registerComputerUseTools } from '../server/register-tools'
 import { createRuntimeCoordinator } from '../server/runtime-coordinator'
 import { RunStateManager } from '../state'
-import { createTestConfig, createLocalExecutionTarget, createDisplayInfo, createTerminalState } from '../test-fixtures'
-import { CodingPrimitives } from '../coding/primitives'
-import { createExecuteAction } from '../server/action-executor'
+import { TaskMemoryManager } from '../task-memory/manager'
+import { createDisplayInfo, createLocalExecutionTarget, createTerminalState, createTestConfig } from '../test-fixtures'
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<CallToolResult>
 
@@ -59,7 +59,7 @@ function createMockServer() {
     },
     hasTool(name: string) {
       return handlers.has(name)
-    }
+    },
   }
 }
 
@@ -79,11 +79,11 @@ async function createWorkspaceFixture() {
     '  return { debug: DEBUG_MODE }',
     '}',
     '',
-    'export { createConfig }'
+    'export { createConfig }',
   ].join('\n')
-  
+
   await writeFile(join(workspace, 'index.ts'), indexContent, 'utf8')
-  
+
   const checkContent = [
     'const fs = require("fs");',
     'try {',
@@ -100,7 +100,7 @@ async function createWorkspaceFixture() {
     '} catch (err) {',
     '  console.error(err);',
     '  process.exit(1);',
-    '}'
+    '}',
   ].join('\n')
 
   await writeFile(join(workspace, 'check.js'), checkContent, 'utf8')
@@ -127,7 +127,7 @@ function createRuntime(sessionRoot: string) {
       listPendingActions: () => [],
       removePendingAction: () => {},
       record: async (entry: any) => {
-        traceEntries.push({ ...entry, id: 'mock-' + traceEntries.length, at: new Date().toISOString() })
+        traceEntries.push({ ...entry, id: `mock-${traceEntries.length}`, at: new Date().toISOString() })
         return undefined
       },
       getRecentTrace: (limit = 50) => traceEntries.slice(-Math.max(limit, 1)),
@@ -157,7 +157,8 @@ function createRuntime(sessionRoot: string) {
         try {
           const stdout = execFileSync(input.command, { cwd: effectiveCwd, shell: true, encoding: 'utf8', timeout: input.timeoutMs })
           return { command: input.command, exitCode: 0, stdout, stderr: '', effectiveCwd, durationMs: 100, timedOut: false }
-        } catch (err: any) {
+        }
+        catch (err: any) {
           return { command: input.command, exitCode: err.status || 1, stdout: err.stdout || '', stderr: err.stderr || err.message, effectiveCwd, durationMs: 100, timedOut: false }
         }
       },
@@ -179,9 +180,7 @@ function createRuntime(sessionRoot: string) {
         connectable: false,
       }),
     },
-    taskMemory: {
-        toContextString: () => 'Mock Context Memory',
-    },
+    taskMemory: new TaskMemoryManager(),
   } as any
   base.coordinator = createRuntimeCoordinator(base)
   return base
@@ -217,7 +216,8 @@ async function runCompare() {
       testCommand: 'node check.js',
       autoApprove: true,
     })
-  } catch (error) {
+  }
+  catch (error) {
     console.error('Agentic Loop crashed:', error)
   }
 
@@ -236,7 +236,8 @@ async function runCompare() {
       workspacePath: workspaceB,
       taskGoal: 'Rename the variable DEBUG_MODE to CONFIG_DEBUG_MODE. Make sure the code passes the `node check.js` script. If there is an error in createConfig, fix it.',
     })
-  } catch (error) {
+  }
+  catch (error) {
     console.error('Coding Runner crashed:', error)
   }
 
@@ -252,7 +253,7 @@ async function runCompare() {
     codingRunner: {
       isError: resultB?.isError,
       structuredContent: resultB?.structuredContent,
-    }
+    },
   }
 
   console.log(JSON.stringify(report, null, 2))
@@ -263,9 +264,11 @@ async function runCompare() {
 
   if (aStatus === 'completed' && bStatus === 'completed') {
     console.log('\n[PASS] Both successfully passed. Agentic loop recovered against expectation.')
-  } else if (bStatus === 'completed') {
+  }
+  else if (bStatus === 'completed') {
     console.log('\n[PASS] Coding runner succeeded while static agentic loop predictably failed the cascading update.')
-  } else {
+  }
+  else {
     console.log('\n[FAIL] Coding runner did not successfully complete the task.')
     process.exit(1) // Fail the integration test coverage
   }
