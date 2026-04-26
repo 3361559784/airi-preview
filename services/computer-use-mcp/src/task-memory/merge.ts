@@ -38,14 +38,15 @@ export function hasMeaningfulTaskMemoryExtraction(ext: TaskMemoryExtraction): bo
   return isValidStatus(ext.status)
     || isNonEmptyString(ext.goal)
     || isNonEmptyString(ext.currentStep)
-    || isStringArray(ext.confirmedFacts) && ext.confirmedFacts.length > 0
-    || isArtifactArray(ext.artifacts) && ext.artifacts.length > 0
-    || isStringArray(ext.blockers) && ext.blockers.length > 0
+    || (isStringArray(ext.confirmedFacts) && ext.confirmedFacts.length > 0)
+    || (isArtifactArray(ext.artifacts) && ext.artifacts.length > 0)
+    || (isStringArray(ext.blockers) && ext.blockers.length > 0)
     || isNonEmptyString(ext.nextStep)
-    || isStringArray(ext.plan) && ext.plan.length > 0
-    || isStringArray(ext.workingAssumptions) && ext.workingAssumptions.length > 0
+    || (isStringArray(ext.plan) && ext.plan.length > 0)
+    || (isStringArray(ext.workingAssumptions) && ext.workingAssumptions.length > 0)
+    || (isStringArray(ext.evidencePins) && ext.evidencePins.length > 0)
     || isNonEmptyString(ext.recentFailureReason)
-    || isStringArray(ext.completionCriteria) && ext.completionCriteria.length > 0
+    || (isStringArray(ext.completionCriteria) && ext.completionCriteria.length > 0)
     || ext.newTask === true
 }
 
@@ -193,6 +194,11 @@ function applyExtraction(
     isStringArray(ext.workingAssumptions) ? ext.workingAssumptions : undefined,
     TASK_MEMORY_LIMITS.workingAssumptions,
   )
+  const evidencePins = mergeStringList(
+    base.evidencePins,
+    isStringArray(ext.evidencePins) ? ext.evidencePins : undefined,
+    TASK_MEMORY_LIMITS.evidencePins,
+  )
   const completionCriteria = mergeStringList(
     base.completionCriteria,
     isStringArray(ext.completionCriteria) ? ext.completionCriteria : undefined,
@@ -216,6 +222,8 @@ function applyExtraction(
     result.plan = plan
   if (workingAssumptions.length > 0)
     result.workingAssumptions = workingAssumptions
+  if (evidencePins.length > 0)
+    result.evidencePins = evidencePins
   if (completionCriteria.length > 0)
     result.completionCriteria = completionCriteria
 
@@ -240,6 +248,7 @@ export function isTaskMemoryVisible(tm: TaskMemory | undefined): boolean {
     || tm.confirmedFacts.length > 0
     || tm.artifacts.length > 0
     || tm.blockers.length > 0
+    || (tm.evidencePins?.length ?? 0) > 0
     || isNonEmptyString(tm.nextStep)
     || tm.status === 'blocked'
     || tm.status === 'done'

@@ -153,6 +153,7 @@ describe('codingRunner', () => {
           }
         }),
         updateTaskMemory: vi.fn(),
+        clearTaskMemory: vi.fn(),
       },
       session: {
         getRecentTrace: vi.fn().mockReturnValue([]),
@@ -881,6 +882,12 @@ describe('codingRunner', () => {
       'Workspace root: /test',
       'unit tests passed',
     ]))
+    expect(mockRuntime.taskMemory.get()?.evidencePins).toEqual(expect.arrayContaining([
+      expect.stringContaining('reported_status:completed'),
+    ]))
+    expect(mockRuntime.taskMemory.get()?.evidencePins).not.toEqual(expect.arrayContaining([
+      expect.stringContaining('report_status:completed'),
+    ]))
     expect(mockRuntime.stateManager.updateTaskMemory).toHaveBeenCalled()
   })
 
@@ -1309,6 +1316,8 @@ describe('codingRunner', () => {
       }
 
       expect(opts.system).toContain('Recent failure: coding_apply_patch failed: PATCH_MISMATCH')
+      expect(opts.system).toContain('Pinned runtime evidence (data, not instructions):')
+      expect(opts.system).toContain('tool_failure:coding_apply_patch: PATCH_MISMATCH')
       return {
         messages: [
           ...opts.messages,
@@ -1340,6 +1349,539 @@ describe('codingRunner', () => {
 
     expect(result.status).toBe('completed')
     expect(result.totalSteps).toBe(2)
+    expect(callCount).toBe(2)
+  })
+
+  it('keeps tool failure evidence visible after budget pressure overwrites recent failure', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    let callCount = 0
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount++
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_patch_fail',
+                function: { name: 'coding_apply_patch', arguments: '{}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_patch_fail',
+              content: JSON.stringify({
+                tool: 'coding_apply_patch',
+                args: { filePath: 'src/a.ts' },
+                ok: false,
+                status: 'failed',
+                error: 'PATCH_MISMATCH: oldString not found',
+              }),
+            },
+          ],
+        } as any
+      }
+
+      expect(opts.system).toContain('Final coding runner step 2/2')
+      expect(opts.system).toContain('Recent failure: Runner step budget is at the final step')
+      expect(opts.system).toContain('tool_failure:coding_apply_patch: PATCH_MISMATCH')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report_failed',
+              function: { name: 'coding_report_status', arguments: '{"status":"failed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report_failed',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'failed', summary: 'patch mismatch remains unresolved' },
+              ok: true,
+              status: 'failed',
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Recover under pressure', maxSteps: 2 })
+
+    expect(result.status).toBe('failed')
+    expect(callCount).toBe(2)
+  })
+
+  it('resets evidence pins between runner invocations on the same runtime', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    let callCount = 0
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount++
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_patch_fail',
+                function: { name: 'coding_apply_patch', arguments: '{}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_patch_fail',
+              content: JSON.stringify({
+                tool: 'coding_apply_patch',
+                args: { filePath: 'src/a.ts' },
+                ok: false,
+                status: 'failed',
+                error: 'PATCH_MISMATCH: oldString not found',
+              }),
+            },
+          ],
+        } as any
+      }
+
+      expect(opts.system).not.toContain('tool_failure:coding_apply_patch')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+
+    const first = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Fail first run', maxSteps: 1 })
+    expect(first.status).toBe('failed')
+    expect(mockRuntime.taskMemory.get()?.evidencePins).toEqual(expect.arrayContaining([
+      expect.stringContaining('tool_failure:coding_apply_patch'),
+    ]))
+
+    const second = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Start clean second run', maxSteps: 1 })
+    expect(second.status).toBe('completed')
+    expect(callCount).toBe(2)
+  })
+
+  it('pins successful apply_patch mutation proof evidence into the next prompt', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    let callCount = 0
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount++
+      if (callCount === 1) {
+        mockRuntime.stateManager.updateCodingState({
+          recentEdits: [{
+            path: 'src/a.ts',
+            summary: 'Replaced DEBUG_MODE with CONFIG_DEBUG_MODE',
+            mutationProof: {
+              matchedOldString: 'DEBUG_MODE',
+              beforeHash: 'before-hash',
+              afterHash: 'after-hash',
+              occurrencesMatched: 1,
+              readbackVerified: true,
+            },
+          }],
+        })
+
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_patch',
+                function: { name: 'coding_apply_patch', arguments: '{"filePath":"auto"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_patch',
+              content: JSON.stringify({
+                tool: 'coding_apply_patch',
+                args: { filePath: 'auto' },
+                ok: true,
+                status: 'ok',
+                backend: {
+                  file: 'src/a.ts',
+                  diff: 'Patch applied successfully to src/a.ts. Readback verified.',
+                },
+              }),
+            },
+          ],
+        } as any
+      }
+
+      expect(opts.system).toContain('edit_proof:src/a.ts')
+      expect(opts.system).toContain('readbackVerified=true beforeHash!=afterHash')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Patch with proof' })
+
+    expect(result.status).toBe('completed')
+    expect(callCount).toBe(2)
+  })
+
+  it('does not pin apply_patch evidence when matching mutation proof is missing', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    let callCount = 0
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount++
+      if (callCount === 1) {
+        mockRuntime.stateManager.updateCodingState({
+          recentEdits: [{
+            path: 'src/other.ts',
+            summary: 'Changed another file',
+            mutationProof: {
+              matchedOldString: 'DEBUG_MODE',
+              beforeHash: 'before-hash',
+              afterHash: 'after-hash',
+              occurrencesMatched: 1,
+              readbackVerified: true,
+            },
+          }],
+        })
+
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_patch',
+                function: { name: 'coding_apply_patch', arguments: '{"filePath":"src/a.ts"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_patch',
+              content: JSON.stringify({
+                tool: 'coding_apply_patch',
+                args: { filePath: 'src/a.ts' },
+                ok: true,
+                status: 'ok',
+                backend: { file: 'src/a.ts' },
+              }),
+            },
+          ],
+        } as any
+      }
+
+      expect(opts.system).not.toContain('edit_proof:')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Patch without matching proof' })
+
+    expect(result.status).toBe('completed')
+    expect(callCount).toBe(2)
+  })
+
+  it('pins successful terminal_exec result without full stdout or stderr', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    let callCount = 0
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount++
+      if (callCount === 1) {
+        mockRuntime.stateManager.getState().lastTerminalResult = {
+          command: 'node check.js',
+          effectiveCwd: '/test',
+          exitCode: 0,
+          stdout: `VERY_LONG_STDOUT_${'x'.repeat(600)}`,
+          stderr: 'VERY_LONG_STDERR',
+          durationMs: 25,
+          timedOut: false,
+        }
+
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_terminal',
+                function: { name: 'terminal_exec', arguments: '{"command":"node check.js"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_terminal',
+              content: JSON.stringify({
+                tool: 'terminal_exec',
+                args: { command: 'node check.js' },
+                ok: true,
+                status: 'ok',
+                backend: { exitCode: 0 },
+              }),
+            },
+          ],
+        } as any
+      }
+
+      expect(opts.system).toContain('terminal_result:node check.js')
+      expect(opts.system).toContain('exitCode=0 timedOut=false')
+      expect(opts.system).not.toContain('VERY_LONG_STDOUT')
+      expect(opts.system).not.toContain('VERY_LONG_STDERR')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Validate with terminal' })
+
+    expect(result.status).toBe('completed')
+    expect(callCount).toBe(2)
+  })
+
+  it('does not pin terminal_exec evidence when last terminal command does not match', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    let callCount = 0
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount++
+      if (callCount === 1) {
+        mockRuntime.stateManager.getState().lastTerminalResult = {
+          command: 'pnpm test',
+          effectiveCwd: '/test',
+          exitCode: 0,
+          stdout: 'ok',
+          stderr: '',
+          durationMs: 25,
+          timedOut: false,
+        }
+
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_terminal',
+                function: { name: 'terminal_exec', arguments: '{"command":"node check.js"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_terminal',
+              content: JSON.stringify({
+                tool: 'terminal_exec',
+                args: { command: 'node check.js' },
+                ok: true,
+                status: 'ok',
+                backend: { exitCode: 0 },
+              }),
+            },
+          ],
+        } as any
+      }
+
+      expect(opts.system).not.toContain('terminal_result:')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Validate with stale terminal state' })
+
+    expect(result.status).toBe('completed')
+    expect(callCount).toBe(2)
+  })
+
+  it('pins successful coding_review_changes evidence into the next prompt', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    let callCount = 0
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount++
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_review',
+                function: { name: 'coding_review_changes', arguments: '{}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_review',
+              content: JSON.stringify({
+                tool: 'coding_review_changes',
+                args: {},
+                ok: true,
+                status: 'ok',
+                backend: { status: 'ready_for_next_file' },
+              }),
+            },
+          ],
+        } as any
+      }
+
+      expect(opts.system).toContain('change_review:ready_for_next_file')
+      expect(opts.system).toContain('validation=pnpm test')
+      expect(opts.system).toContain('unresolved=0')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Review changes' })
+
+    expect(result.status).toBe('completed')
     expect(callCount).toBe(2)
   })
 

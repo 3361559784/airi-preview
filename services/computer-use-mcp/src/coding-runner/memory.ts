@@ -1,6 +1,11 @@
 import type { ComputerUseServerRuntime } from '../server/runtime'
-import type { CodingTaskKind } from '../state'
+import type { CodingTaskKind, RunState } from '../state'
 import type { TaskMemoryExtraction } from '../task-memory/types'
+
+const MAX_EVIDENCE_PIN_CHARS = 240
+const EVIDENCE_PIN_CONTROL_CHARS_RE = /[\u0000-\u0008\v\f\u000E-\u001F\u007F]/g
+const EVIDENCE_PIN_WHITESPACE_RE = /\s+/g
+const PATCH_APPLIED_SUMMARY_RE = /^Patch applied successfully to (.+)\. Readback verified\.$/
 
 export function syncCodingRunnerTaskMemory(params: {
   runtime: ComputerUseServerRuntime
@@ -87,6 +92,12 @@ export function buildBudgetExhaustedMemory(params: {
     blockers: [`BUDGET_EXHAUSTED: runner reached maxSteps=${params.maxSteps} without an accepted terminal report.${suffix}`],
     recentFailureReason: `BUDGET_EXHAUSTED: maxSteps=${params.maxSteps}.${suffix}`,
     nextStep: 'Start a fresh run with narrower scope or report failed/blocked earlier when evidence is insufficient.',
+    evidencePins: [
+      formatEvidencePin(
+        `budget_exhausted:maxSteps=${params.maxSteps}`,
+        params.lastToolName ? `lastTool=${params.lastToolName}` : '',
+      ),
+    ],
   }
 }
 
@@ -100,6 +111,24 @@ export function buildToolFailureMemory(params: {
     currentStep: `Recover from failed ${params.toolName}`,
     recentFailureReason: reason,
     nextStep: 'Use the failure details to adjust the next action instead of repeating the same call.',
+    evidencePins: [
+      formatEvidencePin(`tool_failure:${params.toolName}`, params.summary),
+    ],
+  }
+}
+
+export function buildVerificationGateFailureMemory(params: {
+  reasonCode?: string
+  summary: string
+}): TaskMemoryExtraction {
+  return {
+    status: 'active',
+    currentStep: 'Recover from verification gate failure',
+    recentFailureReason: params.summary,
+    nextStep: 'Use the verification gate reason to gather missing runtime evidence before reporting completed again.',
+    evidencePins: [
+      formatEvidencePin(`verification_gate_failed:${params.reasonCode ?? 'unknown'}`, params.summary),
+    ],
   }
 }
 
@@ -144,5 +173,118 @@ export function buildReportStatusMemory(params: {
     blockers: params.status === 'completed' || !params.summary ? undefined : [params.summary],
     nextStep: params.status === 'completed' ? null : params.nextStep,
     recentFailureReason: params.status === 'completed' ? null : params.summary,
+    evidencePins: [
+      formatEvidencePin(`reported_status:${params.status}`, params.summary ?? ''),
+    ],
   }
+}
+
+export function buildSuccessfulToolEvidenceMemory(params: {
+  toolName: string
+  toolArgs: unknown
+  toolBackend: unknown
+  state: RunState
+}): TaskMemoryExtraction | undefined {
+  switch (params.toolName) {
+    case 'coding_apply_patch':
+      return buildApplyPatchEvidenceMemory(params.toolArgs, params.toolBackend, params.state)
+    case 'terminal_exec':
+      return buildTerminalExecEvidenceMemory(params.toolArgs, params.state)
+    case 'coding_review_changes':
+      return buildReviewChangesEvidenceMemory(params.toolBackend, params.state)
+    default:
+      return undefined
+  }
+}
+
+export function formatEvidencePin(prefix: string, body: string, maxChars = MAX_EVIDENCE_PIN_CHARS): string {
+  const cleaned = `${prefix}${body.trim() ? `: ${body}` : ''}`
+    .replace(EVIDENCE_PIN_CONTROL_CHARS_RE, ' ')
+    .replace(EVIDENCE_PIN_WHITESPACE_RE, ' ')
+    .trim()
+
+  return cleaned.length > maxChars ? cleaned.slice(0, maxChars) : cleaned
+}
+
+function buildApplyPatchEvidenceMemory(
+  toolArgs: unknown,
+  toolBackend: unknown,
+  state: RunState,
+): TaskMemoryExtraction | undefined {
+  const candidatePaths = extractApplyPatchTargetPathCandidates(toolArgs, toolBackend)
+  if (candidatePaths.length === 0)
+    return undefined
+
+  const edit = [...(state.coding?.recentEdits ?? [])]
+    .reverse()
+    .find(edit => candidatePaths.includes(edit.path))
+  const proof = edit?.mutationProof
+
+  if (!proof?.readbackVerified || proof.beforeHash === proof.afterHash)
+    return undefined
+
+  return {
+    evidencePins: [
+      formatEvidencePin(
+        `edit_proof:${edit.path}`,
+        `readbackVerified=${proof.readbackVerified} beforeHash!=afterHash summary=${edit.summary ?? 'patch applied'}`,
+      ),
+    ],
+  }
+}
+
+function buildTerminalExecEvidenceMemory(toolArgs: unknown, state: RunState): TaskMemoryExtraction | undefined {
+  const command = stringProp(toolArgs, 'command')
+  const result = state.lastTerminalResult
+  if (!command || !result || result.command !== command)
+    return undefined
+
+  return {
+    evidencePins: [
+      formatEvidencePin(
+        `terminal_result:${command}`,
+        `exitCode=${result.exitCode} timedOut=${result.timedOut}`,
+      ),
+    ],
+  }
+}
+
+function buildReviewChangesEvidenceMemory(toolBackend: unknown, state: RunState): TaskMemoryExtraction | undefined {
+  const review = state.coding?.lastChangeReview
+  if (!review)
+    return undefined
+
+  const backendStatus = stringProp(toolBackend, 'status')
+  if (!backendStatus || backendStatus !== review.status)
+    return undefined
+
+  const validation = review.validationCommand || review.validationSummary
+  return {
+    evidencePins: [
+      formatEvidencePin(
+        `change_review:${review.status}`,
+        `validation=${validation} unresolved=${review.unresolvedIssues.length}`,
+      ),
+    ],
+  }
+}
+
+function extractApplyPatchTargetPathCandidates(toolArgs: unknown, toolBackend: unknown): string[] {
+  return [
+    stringProp(toolArgs, 'filePath'),
+    stringProp(toolBackend, 'file'),
+    extractPatchAppliedPath(stringProp(toolBackend, 'diff')),
+  ].filter((path): path is string => Boolean(path) && path !== 'auto')
+}
+
+function extractPatchAppliedPath(summary: string | undefined): string | undefined {
+  const match = summary?.match(PATCH_APPLIED_SUMMARY_RE)
+  return match?.[1]
+}
+
+function stringProp(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== 'object')
+    return undefined
+  const prop = (value as Record<string, unknown>)[key]
+  return typeof prop === 'string' && prop.trim().length > 0 ? prop.trim() : undefined
 }

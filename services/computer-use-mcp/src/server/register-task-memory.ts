@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
+import type { TaskMemory } from '../task-memory/types'
 import type { ComputerUseServerRuntime } from './runtime'
 
 import { z } from 'zod'
@@ -69,7 +70,7 @@ export function registerTaskMemoryTools(server: McpServer, runtime: ComputerUseS
 
         return {
           content: [textContent(`Task memory updated [${merged.status}]${merged.goal ? `: ${merged.goal}` : ''}`)],
-          structuredContent: { ...merged } as Record<string, unknown>,
+          structuredContent: publicTaskMemorySnapshot(merged),
         }
       }
 
@@ -101,7 +102,7 @@ export function registerTaskMemoryTools(server: McpServer, runtime: ComputerUseS
 
       return {
         content: [textContent(runtime.taskMemory.toContextString())],
-        structuredContent: { ...tm } as Record<string, unknown>,
+        structuredContent: publicTaskMemorySnapshot(tm),
       }
     },
   })
@@ -120,4 +121,9 @@ export function registerTaskMemoryTools(server: McpServer, runtime: ComputerUseS
       }
     },
   })
+}
+
+function publicTaskMemorySnapshot(tm: TaskMemory): Record<string, unknown> {
+  const { evidencePins: _evidencePins, ...publicSnapshot } = tm
+  return publicSnapshot as Record<string, unknown>
 }

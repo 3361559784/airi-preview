@@ -32,6 +32,7 @@ export interface TaskMemory {
   // --- Secondary fields (all optional) ---
   plan?: string[]
   workingAssumptions?: string[]
+  evidencePins?: string[]
   recentFailureReason?: string | null
   completionCriteria?: string[]
 }
@@ -50,6 +51,7 @@ export interface TaskMemoryExtraction {
   nextStep?: string | null
   plan?: string[]
   workingAssumptions?: string[]
+  evidencePins?: string[]
   recentFailureReason?: string | null
   completionCriteria?: string[]
   /** Signals a clearly new task, triggering soft reset. */
@@ -70,5 +72,6 @@ export const TASK_MEMORY_LIMITS = {
   blockers: 5,
   plan: 6,
   workingAssumptions: 6,
+  evidencePins: 8,
   completionCriteria: 6,
 } as const

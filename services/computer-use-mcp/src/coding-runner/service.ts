@@ -11,7 +11,7 @@ import { generateText } from '@xsai/generate-text'
 
 import { evaluateCodingVerificationGate } from '../coding/verification-gate'
 import { createCodingRunnerEventEmitter } from './events'
-import { buildBudgetExhaustedMemory, buildBudgetPressureMemory, buildReportStatusMemory, buildStepMemory, buildTaskStartMemory, buildTextOnlyReportRequiredMemory, buildToolFailureMemory, syncCodingRunnerTaskMemory } from './memory'
+import { buildBudgetExhaustedMemory, buildBudgetPressureMemory, buildReportStatusMemory, buildStepMemory, buildSuccessfulToolEvidenceMemory, buildTaskStartMemory, buildTextOnlyReportRequiredMemory, buildToolFailureMemory, buildVerificationGateFailureMemory, syncCodingRunnerTaskMemory } from './memory'
 import { buildXsaiCodingTools } from './tool-runtime'
 import { createTranscriptRuntime, projectForCodingTurn } from './transcript-runtime'
 
@@ -46,6 +46,11 @@ export class CodingRunnerImpl implements CodingRunner {
       maxSteps: actualMaxSteps,
       stepTimeoutMs: actualStepTimeoutMs,
     })
+
+    // TaskMemory is per-run recovery context. Reset it before preflight so stale
+    // evidence pins from a previous workflow_coding_runner call cannot leak.
+    runtime.taskMemory.clear()
+    runtime.stateManager.clearTaskMemory()
 
     const { store: transcriptStore, archiveStore, workspaceMemoryStore } = await createTranscriptRuntime(
       runtime,
@@ -208,13 +213,17 @@ export class CodingRunnerImpl implements CodingRunner {
             let resultOk = true
             let reportStatus: 'completed' | 'failed' | 'blocked' | undefined
             let failureSummary: string | undefined
+            let parsedToolResult: Record<string, unknown> | undefined
             try {
               const parsed = JSON.parse(lastContent)
-              toolName = parsed.tool || 'unknown'
-              toolArgs = parsed.args
-              resultOk = parsed.ok !== false
-              reportStatus = parseReportStatus(parsed)
-              failureSummary = parseToolFailureSummary(parsed)
+              if (isRecord(parsed)) {
+                parsedToolResult = parsed
+                toolName = typeof parsed.tool === 'string' ? parsed.tool : 'unknown'
+                toolArgs = parsed.args
+                resultOk = parsed.ok !== false
+                reportStatus = parseReportStatus(parsed)
+                failureSummary = parseToolFailureSummary(parsed)
+              }
             }
             catch {}
 
@@ -239,6 +248,23 @@ export class CodingRunnerImpl implements CodingRunner {
                   summary: lastFailureSummary,
                 }),
               })
+            }
+            else if (toolName !== 'coding_report_status') {
+              const evidenceMemory = buildSuccessfulToolEvidenceMemory({
+                toolName,
+                toolArgs,
+                toolBackend: parsedToolResult?.backend,
+                state: runtime.stateManager.getState(),
+              })
+              if (evidenceMemory) {
+                syncCodingRunnerTaskMemory({
+                  runtime,
+                  runId,
+                  source: `tool-success-evidence-${step + 1}`,
+                  sourceIndex: (step + 1) * 10 + 4,
+                  extraction: evidenceMemory,
+                })
+              }
             }
 
             if (toolName === 'coding_report_status') {
@@ -287,8 +313,8 @@ export class CodingRunnerImpl implements CodingRunner {
                       runId,
                       source: `verification-gate-${step + 1}`,
                       sourceIndex: (step + 1) * 10 + 3,
-                      extraction: buildToolFailureMemory({
-                        toolName: 'coding_report_status',
+                      extraction: buildVerificationGateFailureMemory({
+                        reasonCode: gateOutcome.decision.reasonCode,
                         summary: finalError,
                       }),
                     })
