@@ -189,6 +189,7 @@ describe('codingRunner', () => {
       toolName: 'coding_report_status',
       resultOk: false,
     })
+    expect(mockRuntime.taskMemory.get()?.recentFailureReason).toContain('Completion Denied')
     expect(events.map(event => event.kind)).not.toContain('report_status')
   })
 
@@ -550,6 +551,74 @@ describe('codingRunner', () => {
     expect(result.totalSteps).toBe(2)
     expect(result.status).toBe('failed') // derived cleanly from parsed tool payload 'status'
     expect(result.turns.length).toBe(2)
+  })
+
+  it('injects failed tool results into next-step task memory for recovery', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    let callCount = 0
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount++
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_patch_fail',
+                function: { name: 'coding_apply_patch', arguments: '{}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_patch_fail',
+              content: JSON.stringify({
+                tool: 'coding_apply_patch',
+                args: { filePath: 'src/a.ts' },
+                ok: false,
+                status: 'failed',
+                error: 'PATCH_MISMATCH: oldString not found',
+              }),
+            },
+          ],
+        } as any
+      }
+
+      expect(opts.system).toContain('Recent failure: coding_apply_patch failed: PATCH_MISMATCH')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Recover from patch mismatch' })
+
+    expect(result.status).toBe('completed')
+    expect(result.totalSteps).toBe(2)
+    expect(callCount).toBe(2)
   })
 
   it('should fail when loop ends on text-only assistant output without terminal report', async () => {

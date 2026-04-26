@@ -6,7 +6,7 @@ import { errorMessageFrom } from '@moeru/std'
 import { generateText } from '@xsai/generate-text'
 
 import { createCodingRunnerEventEmitter } from './events'
-import { buildReportStatusMemory, buildStepMemory, buildTaskStartMemory, syncCodingRunnerTaskMemory } from './memory'
+import { buildReportStatusMemory, buildStepMemory, buildTaskStartMemory, buildToolFailureMemory, syncCodingRunnerTaskMemory } from './memory'
 import { buildXsaiCodingTools } from './tool-runtime'
 import { createTranscriptRuntime, projectForCodingTurn } from './transcript-runtime'
 
@@ -185,12 +185,14 @@ export class CodingRunnerImpl implements CodingRunner {
             let toolArgs: any
             let resultOk = true
             let reportStatus: 'completed' | 'failed' | 'blocked' | undefined
+            let failureSummary: string | undefined
             try {
               const parsed = JSON.parse(lastContent)
               toolName = parsed.tool || 'unknown'
               toolArgs = parsed.args
               resultOk = parsed.ok !== false
               reportStatus = parseReportStatus(parsed)
+              failureSummary = parseToolFailureSummary(parsed)
             }
             catch {}
 
@@ -201,6 +203,19 @@ export class CodingRunnerImpl implements CodingRunner {
               resultOk,
               rawText: lastContent,
             })
+
+            if (!resultOk) {
+              syncCodingRunnerTaskMemory({
+                runtime,
+                runId,
+                source: `tool-failure-${step + 1}`,
+                sourceIndex: (step + 1) * 10 + 1,
+                extraction: buildToolFailureMemory({
+                  toolName,
+                  summary: failureSummary ?? lastContent.slice(0, 500),
+                }),
+              })
+            }
 
             if (toolName === 'coding_report_status') {
               if (resultOk && reportStatus) {
@@ -305,4 +320,20 @@ function parseReportStatus(parsed: unknown): 'completed' | 'failed' | 'blocked' 
 
 function isTerminalReportStatus(value: unknown): value is 'completed' | 'failed' | 'blocked' {
   return value === 'completed' || value === 'failed' || value === 'blocked'
+}
+
+function parseToolFailureSummary(parsed: unknown): string | undefined {
+  if (!isRecord(parsed))
+    return undefined
+
+  if (typeof parsed.error === 'string' && parsed.error.trim().length > 0)
+    return parsed.error.trim().slice(0, 500)
+  if (typeof parsed.summary === 'string' && parsed.summary.trim().length > 0)
+    return parsed.summary.trim().slice(0, 500)
+
+  const backend = parsed.backend
+  if (isRecord(backend) && typeof backend.error === 'string' && backend.error.trim().length > 0)
+    return backend.error.trim().slice(0, 500)
+
+  return undefined
 }

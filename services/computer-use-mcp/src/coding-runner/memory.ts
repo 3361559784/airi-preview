@@ -33,6 +33,19 @@ export function buildStepMemory(stepIndex: number, maxSteps: number): TaskMemory
   }
 }
 
+export function buildToolFailureMemory(params: {
+  toolName: string
+  summary: string
+}): TaskMemoryExtraction {
+  const reason = `${params.toolName} failed: ${params.summary}`.slice(0, 800)
+  return {
+    status: 'active',
+    currentStep: `Recover from failed ${params.toolName}`,
+    recentFailureReason: reason,
+    nextStep: 'Use the failure details to adjust the next action instead of repeating the same call.',
+  }
+}
+
 export function buildReportStatusMemory(params: {
   status: 'completed' | 'failed' | 'blocked'
   summary?: string
