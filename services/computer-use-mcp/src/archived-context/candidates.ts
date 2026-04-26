@@ -1,23 +1,11 @@
-import type { CompactedBlock, ToolInteractionBlock, TranscriptBlock, TranscriptEntry } from '../transcript/types'
+import type { TranscriptRetentionOptions } from '../transcript/retention'
+import type { CompactedBlock, TranscriptBlock, TranscriptEntry } from '../transcript/types'
 import type { ArchiveCandidate } from './types'
 
-import { parseTranscriptBlocks } from '../transcript/block-parser'
 import { compactBlock } from '../transcript/compactor'
+import { planTranscriptRetention } from '../transcript/retention'
 
-export interface ArchiveCandidateOptions {
-  /** Maximum number of recent complete tool-interaction blocks kept in prompt. */
-  maxFullToolBlocks?: number
-  /** Maximum number of recent text-like blocks kept in prompt. */
-  maxFullTextBlocks?: number
-  /** Maximum number of removed blocks compacted into prompt history. */
-  maxCompactedBlocks?: number
-}
-
-const DEFAULTS = {
-  maxFullToolBlocks: 5,
-  maxFullTextBlocks: 3,
-  maxCompactedBlocks: 4,
-}
+export type ArchiveCandidateOptions = TranscriptRetentionOptions
 
 /** Minimum normalized content length for text blocks to qualify for archiving. */
 const ARCHIVE_TEXT_MIN_LENGTH = 200
@@ -30,51 +18,17 @@ export function buildArchiveCandidates(
   transcriptEntries: readonly TranscriptEntry[],
   opts: ArchiveCandidateOptions = {},
 ): ArchiveCandidate[] {
-  const maxFullToolBlocks = opts.maxFullToolBlocks ?? DEFAULTS.maxFullToolBlocks
-  const maxFullTextBlocks = opts.maxFullTextBlocks ?? DEFAULTS.maxFullTextBlocks
-  const maxCompactedBlocks = opts.maxCompactedBlocks ?? DEFAULTS.maxCompactedBlocks
-
-  const allBlocks = parseTranscriptBlocks(transcriptEntries)
-  if (allBlocks.length === 0)
+  const retention = planTranscriptRetention(transcriptEntries, opts)
+  if (retention.allBlocks.length === 0)
     return []
 
-  const firstUserBlockIdx = allBlocks.findIndex(b => b.kind === 'user')
-  const candidateBlocks = allBlocks.filter((_, idx) => idx !== firstUserBlockIdx)
+  const compactedResults: CompactedBlock[] = retention.compactedSourceBlocks.map(block => compactBlock(block))
 
-  const toolBlocks: ToolInteractionBlock[] = []
-  const textLikeBlocks: TranscriptBlock[] = []
-
-  for (const block of candidateBlocks) {
-    switch (block.kind) {
-      case 'tool_interaction':
-        toolBlocks.push(block)
-        break
-      case 'text':
-      case 'system':
-      case 'user':
-        textLikeBlocks.push(block)
-        break
-    }
-  }
-
-  const completeToolBlocks = toolBlocks.filter(block => isCompleteToolInteraction(block))
-  const keptToolBlocks: Set<TranscriptBlock> = new Set(takeLast(completeToolBlocks, maxFullToolBlocks))
-  const keptTextBlocks: Set<TranscriptBlock> = new Set(takeLast(textLikeBlocks, maxFullTextBlocks))
-
-  const blocksToCompact: TranscriptBlock[] = []
-  for (const block of candidateBlocks) {
-    if (keptToolBlocks.has(block) || keptTextBlocks.has(block))
-      continue
-    blocksToCompact.push(block)
-  }
-
-  const compactedSourceBlocks = maxCompactedBlocks <= 0
-    ? []
-    : blocksToCompact.slice(-maxCompactedBlocks)
-  const droppedSourceBlocks = blocksToCompact.slice(0, blocksToCompact.length - compactedSourceBlocks.length)
-  const compactedResults: CompactedBlock[] = compactedSourceBlocks.map(block => compactBlock(block))
-
-  return buildCandidatesFromRemovedBlocks(compactedSourceBlocks, droppedSourceBlocks, compactedResults)
+  return buildCandidatesFromRemovedBlocks(
+    [...retention.compactedSourceBlocks],
+    [...retention.droppedSourceBlocks],
+    compactedResults,
+  )
 }
 
 function buildCandidatesFromRemovedBlocks(
@@ -118,26 +72,6 @@ function buildCandidatesFromRemovedBlocks(
   }
 
   return candidates
-}
-
-function isCompleteToolInteraction(block: ToolInteractionBlock): boolean {
-  const toolCalls = block.assistant.toolCalls ?? []
-  if (toolCalls.length === 0)
-    return false
-
-  const resultIds = new Set(
-    block.toolResults
-      .map(result => result.toolCallId)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0),
-  )
-
-  return toolCalls.every(toolCall => resultIds.has(toolCall.id))
-}
-
-function takeLast<T>(items: readonly T[], limit: number): T[] {
-  if (limit <= 0)
-    return []
-  return items.slice(-limit)
 }
 
 function normalizeBlockContent(block: TranscriptBlock): string {

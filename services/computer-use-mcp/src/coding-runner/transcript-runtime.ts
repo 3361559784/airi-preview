@@ -8,6 +8,7 @@ import { buildArchiveCandidates } from '../archived-context/candidates'
 import { ArchiveContextStore } from '../archived-context/store'
 import { projectContext } from '../projection/context-projector'
 import { projectTranscript } from '../transcript/projector'
+import { DEFAULT_TRANSCRIPT_RETENTION_LIMITS } from '../transcript/retention'
 import { InMemoryTranscriptStore, TranscriptStore } from '../transcript/store'
 import { workspaceKeyFromPath, WorkspaceMemoryStore } from '../workspace-memory/store'
 
@@ -24,12 +25,6 @@ export interface CodingTurnProjection extends TranscriptProjectionResult {
 export interface CodingTurnProjectionOptions {
   workspaceMemoryContext?: string
 }
-
-const CODING_TRANSCRIPT_PROJECTION_LIMITS = {
-  maxFullToolBlocks: 5,
-  maxFullTextBlocks: 3,
-  maxCompactedBlocks: 4,
-} as const
 
 export async function createTranscriptRuntime(
   runtime: ComputerUseServerRuntime,
@@ -77,12 +72,12 @@ export function projectForCodingTurn(
 
   const projection = projectTranscript(transcriptEntries, {
     systemPromptBase: systemWithOperationalTrace,
-    ...CODING_TRANSCRIPT_PROJECTION_LIMITS,
+    ...DEFAULT_TRANSCRIPT_RETENTION_LIMITS,
   })
 
   return {
     ...projection,
-    archiveCandidates: buildArchiveCandidates(transcriptEntries, CODING_TRANSCRIPT_PROJECTION_LIMITS),
+    archiveCandidates: buildArchiveCandidates(transcriptEntries, DEFAULT_TRANSCRIPT_RETENTION_LIMITS),
   }
 }
 

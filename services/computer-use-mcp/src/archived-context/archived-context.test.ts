@@ -1,4 +1,4 @@
-import type { TranscriptEntry } from '../transcript/types'
+import type { TranscriptBlock, TranscriptEntry } from '../transcript/types'
 import type { ArchiveCandidate } from './types'
 
 import { randomUUID } from 'node:crypto'
@@ -8,6 +8,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { planTranscriptRetention } from '../transcript/retention'
 import { buildArchiveCandidates } from './candidates'
 import { archiveArtifactFilename, buildArchiveArtifact, serializeArchiveArtifact } from './serializer'
 import { ArchiveContextStore } from './store'
@@ -71,6 +72,14 @@ function toolInteraction(callId: string, toolName: string, args: string, resultC
   return [assistantEntry, resultEntry]
 }
 
+function blockKey(block: TranscriptBlock): string {
+  return `${block.kind}:${block.entryIdRange[0]}:${block.entryIdRange[1]}`
+}
+
+function candidateKey(candidate: ArchiveCandidate): string {
+  return `${candidate.originalKind}:${candidate.entryIdRange[0]}:${candidate.entryIdRange[1]}`
+}
+
 // ---------------------------------------------------------------------------
 // Candidate builder tests
 // ---------------------------------------------------------------------------
@@ -111,6 +120,40 @@ describe('buildArchiveCandidates', () => {
 
     expect(candidates.map(c => c.reason)).toEqual(['compacted', 'dropped'])
     expect(candidates.map(c => c.originalKind)).toEqual(['tool_interaction', 'tool_interaction'])
+  })
+
+  it('derives eligible candidates from retention compacted and dropped source ranges', () => {
+    const entries = [
+      transcriptEntry('user', 'task'),
+      ...toolInteraction('t1', 'tool_a', '{}', 'result a'),
+      ...toolInteraction('t2', 'tool_b', '{}', 'result b'),
+      ...toolInteraction('t3', 'tool_c', '{}', 'result c'),
+    ]
+    const opts = {
+      maxFullToolBlocks: 1,
+      maxFullTextBlocks: 0,
+      maxCompactedBlocks: 1,
+    }
+
+    const retention = planTranscriptRetention(entries, opts)
+    const candidates = buildArchiveCandidates(entries, opts)
+    const keptKeys = new Set(retention.keptFullBlocks.map(blockKey))
+    const compactedKeys = new Set(retention.compactedSourceBlocks.map(blockKey))
+    const droppedKeys = new Set(retention.droppedSourceBlocks.map(blockKey))
+
+    expect(candidates.map(candidate => ({
+      key: candidateKey(candidate),
+      reason: candidate.reason,
+    }))).toEqual([
+      { key: 'tool_interaction:3:4', reason: 'compacted' },
+      { key: 'tool_interaction:1:2', reason: 'dropped' },
+    ])
+
+    for (const candidate of candidates) {
+      const key = candidateKey(candidate)
+      expect(keptKeys.has(key)).toBe(false)
+      expect(candidate.reason === 'compacted' ? compactedKeys.has(key) : droppedKeys.has(key)).toBe(true)
+    }
   })
 
   it('does not duplicate candidates when maxCompactedBlocks is zero', () => {
