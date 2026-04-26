@@ -6,6 +6,19 @@ This document defines how to split the current `computer-use-mcp` coding line in
 
 It is a **salvage plan**, not a history-preservation plan.
 
+## Current Local Integration Status
+
+This local integration branch is intentionally ahead of the review stack. It now includes:
+
+- transcript truth source safety fixes
+- transcript-only provider-safe projection
+- archived context write/search/read for current-run recall
+- transcript-driven `coding-runner`
+- in-process runner event callback contract
+- `workflow_coding_runner` MCP entry smoke coverage
+
+When splitting for review, keep these as separate review layers. Do not present this local integration branch as one PR.
+
 The current branch already mixes:
 
 - coding domain logic
@@ -260,7 +273,7 @@ Each PR should answer only one kind of reviewer question.
 - S4: “Do the coding tools expose the right surface?”
 - S5: “Does the workflow runner wire the pieces correctly?”
 - S6: “Do the soak/e2e harnesses meaningfully validate the stack?”
-        
+
 If a PR forces reviewers to answer two of those at the same time, it is split incorrectly.
 
 ## Immediate Recommendation

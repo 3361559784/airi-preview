@@ -1,12 +1,15 @@
+import type { TranscriptEntry } from '../transcript/types'
+import type { ArchiveCandidate } from './types'
+
 import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, rm } from 'node:fs/promises'
-import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import type { ArchiveCandidate } from '../transcript/types'
-import { buildArchiveArtifact, serializeArchiveArtifact, archiveArtifactFilename } from './serializer'
+import { buildArchiveCandidates } from './candidates'
+import { archiveArtifactFilename, buildArchiveArtifact, serializeArchiveArtifact } from './serializer'
 import { ArchiveContextStore } from './store'
 
 // ---------------------------------------------------------------------------
@@ -38,6 +41,150 @@ function makeTextCandidate(overrides: Partial<ArchiveCandidate> = {}): ArchiveCa
     ...overrides,
   }
 }
+
+let entryId = 0
+
+function transcriptEntry(role: TranscriptEntry['role'], content: string): TranscriptEntry {
+  return {
+    id: entryId++,
+    at: new Date().toISOString(),
+    role,
+    content,
+  }
+}
+
+function toolInteraction(callId: string, toolName: string, args: string, resultContent: string): TranscriptEntry[] {
+  const assistantEntry: TranscriptEntry = {
+    id: entryId++,
+    at: new Date().toISOString(),
+    role: 'assistant',
+    content: '',
+    toolCalls: [{ id: callId, type: 'function', function: { name: toolName, arguments: args } }],
+  }
+  const resultEntry: TranscriptEntry = {
+    id: entryId++,
+    at: new Date().toISOString(),
+    role: 'tool',
+    content: resultContent,
+    toolCallId: callId,
+  }
+  return [assistantEntry, resultEntry]
+}
+
+// ---------------------------------------------------------------------------
+// Candidate builder tests
+// ---------------------------------------------------------------------------
+
+describe('buildArchiveCandidates', () => {
+  beforeEach(() => {
+    entryId = 0
+  })
+
+  it('returns empty candidates when no blocks are removed', () => {
+    const entries = [
+      transcriptEntry('user', 'task'),
+      ...toolInteraction('t1', 'coding_read_file', '{"path":"x.ts"}', 'content here'),
+    ]
+
+    const candidates = buildArchiveCandidates(entries, {
+      maxFullToolBlocks: 5,
+      maxFullTextBlocks: 3,
+      maxCompactedBlocks: 4,
+    })
+
+    expect(candidates).toEqual([])
+  })
+
+  it('splits removed blocks into compacted and dropped candidates', () => {
+    const entries = [
+      transcriptEntry('user', 'task'),
+      ...toolInteraction('t1', 'tool_a', '{}', 'result a'),
+      ...toolInteraction('t2', 'tool_b', '{}', 'result b'),
+      ...toolInteraction('t3', 'tool_c', '{}', 'result c'),
+    ]
+
+    const candidates = buildArchiveCandidates(entries, {
+      maxFullToolBlocks: 1,
+      maxFullTextBlocks: 0,
+      maxCompactedBlocks: 1,
+    })
+
+    expect(candidates.map(c => c.reason)).toEqual(['compacted', 'dropped'])
+    expect(candidates.map(c => c.originalKind)).toEqual(['tool_interaction', 'tool_interaction'])
+  })
+
+  it('does not duplicate candidates when maxCompactedBlocks is zero', () => {
+    const entries = [
+      transcriptEntry('user', 'task'),
+      ...toolInteraction('t1', 'tool_a', '{}', 'result a'),
+      ...toolInteraction('t2', 'tool_b', '{}', 'result b'),
+    ]
+
+    const candidates = buildArchiveCandidates(entries, {
+      maxFullToolBlocks: 0,
+      maxFullTextBlocks: 0,
+      maxCompactedBlocks: 0,
+    })
+
+    expect(candidates).toHaveLength(2)
+    expect(candidates.every(c => c.reason === 'dropped')).toBe(true)
+    expect(new Set(candidates.map(c => c.entryIdRange.join(':'))).size).toBe(candidates.length)
+  })
+
+  it('preserves full normalized content instead of compactor snippets', () => {
+    const longResult = 'x'.repeat(500)
+    const entries = [
+      transcriptEntry('user', 'task'),
+      ...toolInteraction('t1', 'coding_read_file', '{"path":"x.ts"}', longResult),
+    ]
+
+    const candidates = buildArchiveCandidates(entries, {
+      maxFullToolBlocks: 0,
+      maxFullTextBlocks: 0,
+      maxCompactedBlocks: 1,
+    })
+
+    expect(candidates[0].normalizedContent).toContain(longResult)
+  })
+
+  it('filters orphan tool TextBlocks before text length eligibility', () => {
+    const entries: TranscriptEntry[] = [
+      transcriptEntry('user', 'task'),
+      {
+        id: entryId++,
+        at: new Date().toISOString(),
+        role: 'tool',
+        content: 'orphan'.repeat(100),
+        toolCallId: 'missing',
+      },
+    ]
+
+    const candidates = buildArchiveCandidates(entries, {
+      maxFullToolBlocks: 0,
+      maxFullTextBlocks: 0,
+      maxCompactedBlocks: 0,
+    })
+
+    expect(candidates).toEqual([])
+  })
+
+  it('archives long assistant text but skips short assistant text', () => {
+    const entries = [
+      transcriptEntry('user', 'task'),
+      transcriptEntry('assistant', 'short'),
+      transcriptEntry('assistant', 'T'.repeat(250)),
+    ]
+
+    const candidates = buildArchiveCandidates(entries, {
+      maxFullToolBlocks: 0,
+      maxFullTextBlocks: 0,
+      maxCompactedBlocks: 0,
+    })
+
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0].normalizedContent).toBe('T'.repeat(250))
+  })
+})
 
 // ---------------------------------------------------------------------------
 // Serializer tests
@@ -146,13 +293,13 @@ describe('archiveArtifactFilename', () => {
 // Store tests
 // ---------------------------------------------------------------------------
 
-describe('ArchiveContextStore', () => {
+describe('archiveContextStore', () => {
   let tmpDir: string
-  const runId = 'test-run-' + randomUUID().slice(0, 8)
+  const runId = `test-run-${randomUUID().slice(0, 8)}`
   const taskId = runId
 
   beforeEach(async () => {
-    tmpDir = join(tmpdir(), 'archive-test-' + randomUUID().slice(0, 8))
+    tmpDir = join(tmpdir(), `archive-test-${randomUUID().slice(0, 8)}`)
     await mkdir(tmpDir, { recursive: true })
   })
 
@@ -214,5 +361,38 @@ describe('ArchiveContextStore', () => {
   it('throws if writeCandidates called before init', async () => {
     const store = new ArchiveContextStore(tmpDir)
     await expect(store.writeCandidates([], runId, taskId)).rejects.toThrow('init')
+  })
+
+  it('searches existing current-run artifacts by substring', async () => {
+    const store = new ArchiveContextStore(tmpDir)
+    await store.init(runId, taskId)
+
+    await store.writeCandidates([
+      makeToolCandidate({
+        entryIdRange: [10, 12],
+        normalizedContent: 'The previous failure involved CONFIG_DEBUG_MODE and stale imports.',
+      }),
+    ], runId, taskId)
+
+    const hits = await store.search(runId, 'CONFIG_DEBUG_MODE')
+
+    expect(hits).toHaveLength(1)
+    expect(hits[0]).toMatchObject({
+      artifactId: '10-12-compacted.md',
+      sourceRange: [10, 12],
+      reason: 'compacted',
+    })
+    expect(hits[0].excerpt).toContain('CONFIG_DEBUG_MODE')
+  })
+
+  it('reads artifacts only by safe artifact id', async () => {
+    const store = new ArchiveContextStore(tmpDir)
+    await store.init(runId, taskId)
+    await store.writeCandidates([makeToolCandidate({ entryIdRange: [20, 22] })], runId, taskId)
+
+    await expect(store.readArtifact(runId, '../secret.md')).rejects.toThrow('Invalid archive artifact id')
+
+    const content = await store.readArtifact(runId, '20-22-compacted.md')
+    expect(content).toContain('## Transcript Excerpt')
   })
 })

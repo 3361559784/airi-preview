@@ -12,18 +12,19 @@ import { tool } from '@xsai/tool'
 import { z } from 'zod'
 
 import { CodingPrimitives } from '../coding/primitives'
+import { projectContext } from '../projection/context-projector'
 import { registerComputerUseTools } from '../server/register-tools'
 import { createRuntimeCoordinator } from '../server/runtime-coordinator'
 import { initializeGlobalRegistry } from '../server/tool-descriptors'
 import { RunStateManager } from '../state'
-import { InMemoryTranscriptStore } from '../transcript/store'
-import { projectTranscript } from '../transcript/projector'
 import {
   createDisplayInfo,
   createLocalExecutionTarget,
   createTerminalState,
   createTestConfig,
 } from '../test-fixtures'
+import { projectTranscript } from '../transcript/projector'
+import { InMemoryTranscriptStore } from '../transcript/store'
 
 // ---------------------------------------------------------------------------
 // Config — all env-driven with sane defaults
@@ -78,7 +79,7 @@ function createRuntime() {
       listPendingActions: () => [],
       removePendingAction: () => {},
       record: async (entry: any) => {
-        traceEntries.push({ ...entry, id: 'mock-' + traceEntries.length, at: new Date().toISOString() })
+        traceEntries.push({ ...entry, id: `mock-${traceEntries.length}`, at: new Date().toISOString() })
         return undefined
       },
       getRecentTrace: (limit = 50) => traceEntries.slice(-Math.max(limit, 1)),
@@ -815,13 +816,21 @@ export async function runSoak() {
           const timeoutId = setTimeout(() => controller.abort(new Error('STEP_TIMEOUT')), config.stepTimeoutMs)
 
           try {
-            // Unified projection: transcript truth source + operational trace → system + messages
+            // Unified projection: operational context is pinned at the call
+            // site; transcript projector stays transcript-only.
+            const { systemHeader, prunedTrace } = projectContext({
+              trace: runtime.session.getRecentTrace(50),
+              runState: runtime.stateManager.getState(),
+              systemPromptBase: scenario.system,
+            })
+            const systemPromptBase = prunedTrace.length > 0
+              ? `${systemHeader}\n\n【Recent Operational Trace】\n${JSON.stringify(prunedTrace, null, 2)}`
+              : systemHeader
+
             const projection = projectTranscript(
               transcriptStore.getAll(),
               {
-                systemPromptBase: scenario.system,
-                runState: runtime.stateManager.getState(),
-                operationalTrace: runtime.session.getRecentTrace(50),
+                systemPromptBase,
                 maxFullToolBlocks: 5,
                 maxFullTextBlocks: 3,
                 maxCompactedBlocks: 4,

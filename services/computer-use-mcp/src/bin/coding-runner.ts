@@ -1,17 +1,18 @@
 import process from 'node:process'
-import { env } from 'node:process'
 
+import { createCodingRunner, createDefaultCodingRunnerConfig } from '../coding-runner'
 import { createExecuteAction } from '../server/action-executor'
 import { createRuntime } from '../server/runtime'
-import { createCodingRunner, createDefaultCodingRunnerConfig } from '../coding-runner'
 
 async function main() {
-  const taskGoal = process.argv.slice(2).join(' ') || 'Report the workspace status.'
+  const args = process.argv.slice(2)
+  const emitEventsJsonl = args.includes('--events-jsonl')
+  const taskGoal = args.filter(arg => arg !== '--events-jsonl').join(' ') || 'Report the workspace status.'
 
   const config = createDefaultCodingRunnerConfig()
 
-  console.log(`Starting coding runner with model ${config.model} in ${process.cwd()}`)
-  console.log(`Task Goal: ${taskGoal}\n`)
+  process.stdout.write(`Starting coding runner with model ${config.model} in ${process.cwd()}\n`)
+  process.stdout.write(`Task Goal: ${taskGoal}\n\n`)
 
   const runtime = await createRuntime()
   const executeAction = createExecuteAction(runtime)
@@ -21,10 +22,15 @@ async function main() {
   const result = await runner.runCodingTask({
     workspacePath: process.cwd(),
     taskGoal,
+    onEvent: emitEventsJsonl
+      ? (event) => {
+          process.stderr.write(`${JSON.stringify(event)}\n`)
+        }
+      : undefined,
   })
 
-  console.log('\n--- Runner Execution Finished ---\n')
-  console.log(JSON.stringify(result, null, 2))
+  process.stdout.write('\n--- Runner Execution Finished ---\n\n')
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 
 main().catch((err) => {

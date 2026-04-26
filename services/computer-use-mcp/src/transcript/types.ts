@@ -1,5 +1,5 @@
 /**
- * Transcript Truth Source — types for the LLM conversation transcript store.
+ * Transcript Truth Source - types for the LLM conversation transcript store.
  *
  * This is SEPARATE from `SessionTraceEntry` / `audit.jsonl`.
  * `audit.jsonl` records operational events (requested, executed, failed, etc.).
@@ -10,7 +10,7 @@
  */
 
 // ---------------------------------------------------------------------------
-// 1. Transcript Entry — the atomic unit persisted to transcript.jsonl
+// 1. Transcript Entry - the atomic unit persisted to transcript.jsonl
 // ---------------------------------------------------------------------------
 
 /**
@@ -37,7 +37,7 @@ export interface TranscriptEntry {
    */
   toolCalls?: TranscriptToolCall[]
   /**
-   * For tool result messages — the id of the tool_call this responds to.
+   * For tool result messages: the id of the tool_call this responds to.
    */
   toolCallId?: string
 }
@@ -52,19 +52,19 @@ export interface TranscriptToolCall {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Transcript Block — logical grouping of transcript entries
+// 2. Transcript Block - logical grouping of transcript entries
 // ---------------------------------------------------------------------------
 
 /**
  * A "block" is the atomic unit of prompt projection.
- * You never split a block — either the full block appears in the prompt
+ * You never split a block: either the full block appears in the prompt
  * or it is compacted / dropped entirely.
  */
-export type TranscriptBlock =
-  | ToolInteractionBlock
-  | TextBlock
-  | SystemBlock
-  | UserBlock
+export type TranscriptBlock
+  = | ToolInteractionBlock
+    | TextBlock
+    | SystemBlock
+    | UserBlock
 
 export interface ToolInteractionBlock {
   kind: 'tool_interaction'
@@ -78,7 +78,11 @@ export interface ToolInteractionBlock {
 
 export interface TextBlock {
   kind: 'text'
-  /** A single assistant text-only message (no tool_calls). */
+  /**
+   * A single text-only transcript entry.
+   * Usually an assistant message with no tool_calls, but may also be an
+   * orphan tool entry wrapped defensively by transcript parsing.
+   */
   entry: TranscriptEntry
   entryIdRange: [number, number]
 }
@@ -96,7 +100,7 @@ export interface UserBlock {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Compacted Block — deterministic summary of a dropped block
+// 3. Compacted Block - deterministic summary of a dropped block
 // ---------------------------------------------------------------------------
 
 /**
@@ -114,42 +118,14 @@ export interface CompactedBlock {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Archive Candidate — a block removed from prompt eligible for archiving
-// ---------------------------------------------------------------------------
-
-/**
- * Describes a transcript block that was removed from the active prompt
- * (compacted or dropped) and is eligible for persistence to the archive layer.
- *
- * Produced by the projector as a pure data structure — no I/O happens inside
- * the projector. The call site decides whether and where to persist.
- */
-export interface ArchiveCandidate {
-  /** Why this block was removed from the prompt. */
-  reason: 'compacted' | 'dropped'
-  /** Original block kind before removal. */
-  originalKind: TranscriptBlock['kind']
-  /** Entry id range of the source block. */
-  entryIdRange: [number, number]
-  /** Deterministic short summary (same as what goes into system prompt). */
-  summary: string
-  /** Full normalized content for archive persistence (NOT truncated). */
-  normalizedContent: string
-  /** ISO timestamp of the earliest entry in the block. */
-  createdAt: string
-  /** Tags derived from block content (tool names, etc). */
-  tags: string[]
-}
-
-// ---------------------------------------------------------------------------
-// 5. Projection Output — what the projection layer produces
+// 4. Projection Output - what the projection layer produces
 // ---------------------------------------------------------------------------
 
 export type ProjectedBlock = TranscriptBlock | CompactedBlock
 
 export interface TranscriptProjectionResult {
   /**
-   * The system prompt header (pinned: system prompt base + task memory + run state).
+   * The system prompt header (system prompt base + optional task memory).
    */
   system: string
   /**
@@ -159,11 +135,6 @@ export interface TranscriptProjectionResult {
   messages: TranscriptProjectedMessage[]
   /** Projection metadata for observability. */
   metadata: TranscriptProjectionMetadata
-  /**
-   * Blocks removed from the prompt that are eligible for archive persistence.
-   * Produced deterministically — the projector does no I/O.
-   */
-  archiveCandidates: ArchiveCandidate[]
 }
 
 export interface TranscriptProjectedMessage {

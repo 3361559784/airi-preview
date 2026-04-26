@@ -22,6 +22,10 @@ import type { ComputerUseServerRuntime } from './runtime'
 
 import { z } from 'zod'
 
+import { computeBrowserActionConfidence } from '../browser-dom/browser-action-confidence'
+import { compareDomFingerprints, computeDomFingerprint } from '../browser-dom/browser-dom-fingerprint'
+import { diagnoseBrowserActionError } from '../browser-dom/browser-repair-contract'
+import { createCodingRunner, createDefaultCodingRunnerConfig } from '../coding-runner'
 import {
   deriveCodingOperationalMemorySeeds,
   pickPrimaryOperationalMemory,
@@ -53,12 +57,8 @@ import {
   describeForegroundContext,
   summarizeCoordinateSpace,
 } from './formatters'
-import { compareDomFingerprints, computeDomFingerprint } from '../browser-dom/browser-dom-fingerprint'
-import { computeBrowserActionConfidence } from '../browser-dom/browser-action-confidence'
-import { diagnoseBrowserActionError } from '../browser-dom/browser-repair-contract'
 import { registerCodingTools } from './register-coding'
 import { createAcquirePtyCallback, executeApprovedPtyCreate } from './register-pty'
-import { createCodingRunner, createDefaultCodingRunnerConfig } from '../coding-runner'
 import { registerToolWithDescriptor, requireDescriptor } from './tool-descriptors/register-helper'
 import {
   buildCrossLaneAdvisory,
@@ -131,9 +131,10 @@ function buildBrowserDomUnavailableResponse(runtime: ComputerUseServerRuntime) {
   }
 }
 
-async function getReadyStateNudge(runtime: ComputerUseServerRuntime, tabId?: number, frameIds?: number[]): Promise<{ nudge: string; warning: string | undefined }> {
+async function getReadyStateNudge(runtime: ComputerUseServerRuntime, tabId?: number, frameIds?: number[]): Promise<{ nudge: string, warning: string | undefined }> {
   try {
-    if (!runtime.browserDomBridge.getStatus().connected) return { nudge: '', warning: undefined }
+    if (!runtime.browserDomBridge.getStatus().connected)
+      return { nudge: '', warning: undefined }
     const states = await runtime.browserDomBridge.getReadyState({ tabId, frameIds })
     const stillLoading = states.filter(s => s.result !== 'complete')
     if (stillLoading.length > 0) {
@@ -141,7 +142,8 @@ async function getReadyStateNudge(runtime: ComputerUseServerRuntime, tabId?: num
       const nudge = `\n\n💡 Advisory: The page is still loading (${warning}). Elements might shift or not be fully interactive. Proceed with caution.`
       return { nudge, warning }
     }
-  } catch (e) {
+  }
+  catch {
     // optional extension method might not be implemented
   }
   return { nudge: '', warning: undefined }
@@ -157,7 +159,7 @@ async function getDomStalenessNudge(
   beforeFingerprint: string,
   tabId?: number,
   frameIds?: number[],
-): Promise<{ stalenessNudge: string; domUnchanged: boolean; domHashBefore: string; domHashAfter: string }> {
+): Promise<{ stalenessNudge: string, domUnchanged: boolean, domHashBefore: string, domHashAfter: string }> {
   try {
     if (!beforeFingerprint || !runtime.browserDomBridge.getStatus().connected) {
       return { stalenessNudge: '', domUnchanged: false, domHashBefore: beforeFingerprint, domHashAfter: '' }
@@ -178,7 +180,8 @@ async function getDomStalenessNudge(
 
 async function captureDomFingerprintBefore(runtime: ComputerUseServerRuntime, tabId?: number, frameIds?: number[]): Promise<string> {
   try {
-    if (!runtime.browserDomBridge.getStatus().connected) return ''
+    if (!runtime.browserDomBridge.getStatus().connected)
+      return ''
     const frames = await runtime.browserDomBridge.readAllFramesDom({ tabId, frameIds, maxElements: 200 })
     return computeDomFingerprint(frames)
   }
@@ -264,7 +267,7 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
             if (advisory && result && Array.isArray(result.content)) {
               return {
                 ...result,
-                content: [...result.content, textContent('\n\n' + advisory)],
+                content: [...result.content, textContent(`\n\n${advisory}`)],
               }
             }
 
@@ -305,9 +308,7 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
     handler: async () => {
       const snapshot = await coordinator.refreshSnapshot('tool_entry')
       const surfaceSummary = coordinator.getSurfaceSummary()
-      const [permissionInfo] = await Promise.all([
-        runtime.executor.getPermissionInfo(),
-      ])
+      const permissionInfo = await runtime.executor.getPermissionInfo()
 
       const { executionTarget, foregroundContext: context, displayInfo, browserSurfaceAvailability } = snapshot
       const sessionSnapshot = runtime.session.getSnapshot()
@@ -2250,7 +2251,7 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
     handler: async ({ workspacePath, taskGoal, maxSteps, stepTimeoutMs }) => {
       // Create isolated runner configuration
       const config = createDefaultCodingRunnerConfig()
-      
+
       const runner = createCodingRunner(config, {
         runtime,
         executeAction,
@@ -2261,7 +2262,7 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
 
       let summary = ''
       if (result.turns.length > 0) {
-        const lastTurn = result.turns[result.turns.length - 1]
+        const lastTurn = result.turns.at(-1)
         if (lastTurn.toolName === 'coding_report_status') {
           summary = `\nFinal Report: ${lastTurn.rawText}`
         }
@@ -2272,6 +2273,7 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
         isError: result.status === 'crash' || result.status === 'failed',
         content: [textContent(`Parallel Coding Runner finished with status: ${result.status}${summary}`)],
         structuredContent: {
+          runId: result.runId,
           status: result.status,
           totalSteps: result.totalSteps,
           turnsLogLength: result.turns.length,

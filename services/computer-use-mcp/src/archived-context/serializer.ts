@@ -8,10 +8,9 @@
  * and future retrieval.
  */
 
-import { randomUUID } from 'node:crypto'
+import type { ArchiveArtifact, ArchiveArtifactFrontmatter, ArchiveCandidate } from './types'
 
-import type { ArchiveCandidate } from '../transcript/types'
-import type { ArchiveArtifact, ArchiveArtifactFrontmatter } from './types'
+import { randomUUID } from 'node:crypto'
 
 /**
  * Build an ArchiveArtifact from a projection ArchiveCandidate.
@@ -25,11 +24,11 @@ export function buildArchiveArtifact(
   runId: string,
   taskId: string,
 ): ArchiveArtifact {
-  const confidence: ArchiveArtifactFrontmatter['confidence'] =
-    candidate.originalKind === 'tool_interaction' ? 'medium' : 'low'
+  const confidence: ArchiveArtifactFrontmatter['confidence']
+    = candidate.originalKind === 'tool_interaction' ? 'medium' : 'low'
 
-  const summaryType: ArchiveArtifactFrontmatter['summary_type'] =
-    candidate.reason === 'compacted' ? 'compacted_block' : 'dropped_block'
+  const summaryType: ArchiveArtifactFrontmatter['summary_type']
+    = candidate.reason === 'compacted' ? 'compacted_block' : 'dropped_block'
 
   const frontmatter: ArchiveArtifactFrontmatter = {
     id: randomUUID(),

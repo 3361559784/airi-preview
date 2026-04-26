@@ -1,16 +1,16 @@
 /**
- * Deterministic Compactor — summarizes transcript blocks without LLM calls.
+ * Deterministic Compactor - summarizes transcript blocks without LLM calls.
  *
  * When a transcript block is removed from the prompt, the compactor generates
  * a lightweight, deterministic summary so the model doesn't experience a
  * complete context blackout in the middle of the conversation.
  *
  * Rules:
- *   - Tool interaction blocks: tool name, success/failure, key param/result hints
+ *   - Tool interaction blocks: tool name and deterministic result snippets
  *   - Text blocks: truncated first N chars of the assistant text
  *   - User blocks: truncated first N chars
  *   - System blocks: "[system message]"
- *   - Compacted blocks are explicitly tagged — they cannot be confused with
+ *   - Compacted blocks are explicitly tagged; they cannot be confused with
  *     original transcript entries.
  */
 
@@ -31,9 +31,11 @@ function contentToString(content: string | unknown[] | undefined): string {
   if (Array.isArray(content)) {
     // Extract text parts from structured content arrays
     return content
-      .map((part: any) => {
-        if (typeof part === 'string') return part
-        if (part?.type === 'text' && typeof part.text === 'string') return part.text
+      .map((part) => {
+        if (typeof part === 'string')
+          return part
+        if (isTextContentPart(part))
+          return part.text
         return ''
       })
       .filter(Boolean)
@@ -42,13 +44,20 @@ function contentToString(content: string | unknown[] | undefined): string {
   return String(content)
 }
 
+function isTextContentPart(part: unknown): part is { type: 'text', text: string } {
+  if (typeof part !== 'object' || part === null)
+    return false
+  const record = part as { type?: unknown, text?: unknown }
+  return record.type === 'text' && typeof record.text === 'string'
+}
+
 /**
- * Truncate a string to the snippet length, appending '…' if truncated.
+ * Truncate a string to the snippet length, appending '...' if truncated.
  */
 function snippet(text: string): string {
   if (text.length <= SUMMARY_SNIPPET_LENGTH)
     return text
-  return `${text.slice(0, SUMMARY_SNIPPET_LENGTH)}…`
+  return `${text.slice(0, SUMMARY_SNIPPET_LENGTH)}...`
 }
 
 /**
@@ -63,9 +72,7 @@ export function compactBlock(block: TranscriptBlock): CompactedBlock {
 
       const resultSummaries = block.toolResults.map((tr) => {
         const text = contentToString(tr.content)
-        const isError = text.toLowerCase().includes('error')
-          || text.toLowerCase().includes('failed')
-        return `${tr.toolCallId}: ${isError ? 'FAILED' : 'ok'} — ${snippet(text)}`
+        return `${tr.toolCallId}: ${snippet(text)}`
       })
 
       const summary = [

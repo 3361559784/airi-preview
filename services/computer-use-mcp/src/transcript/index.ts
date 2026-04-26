@@ -1,5 +1,10 @@
+export { parseTranscriptBlocks } from './block-parser'
+
+export { compactBlock } from './compactor'
+export { projectTranscript } from './projector'
+export type { TranscriptProjectionOptions } from './projector'
+export { InMemoryTranscriptStore, TranscriptStore } from './store'
 export type {
-  ArchiveCandidate,
   CompactedBlock,
   ProjectedBlock,
   SystemBlock,
@@ -13,9 +18,3 @@ export type {
   TranscriptToolCall,
   UserBlock,
 } from './types'
-
-export { parseTranscriptBlocks } from './block-parser'
-export { compactBlock } from './compactor'
-export { projectTranscript } from './projector'
-export type { TranscriptProjectionOptions } from './projector'
-export { InMemoryTranscriptStore, TranscriptStore } from './store'

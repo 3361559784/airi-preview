@@ -27,6 +27,8 @@ export interface RunCodingTaskParams {
    * Generated via crypto.randomUUID() if omitted.
    */
   runId?: string
+  /** Optional in-process event sink for CLI/UI adapters. */
+  onEvent?: CodingRunnerEventHandler
 }
 
 export interface CodingRunnerTurnResult {
@@ -38,6 +40,7 @@ export interface CodingRunnerTurnResult {
 }
 
 export interface CodingRunnerResult {
+  runId: string
   status: 'completed' | 'timeout' | 'failed' | 'crash'
   totalSteps: number
   transcriptMetadata?: TranscriptProjectionMetadata
@@ -46,5 +49,66 @@ export interface CodingRunnerResult {
 }
 
 export interface CodingRunner {
-  runCodingTask(params: RunCodingTaskParams): Promise<CodingRunnerResult>
+  runCodingTask: (params: RunCodingTaskParams) => Promise<CodingRunnerResult>
+}
+
+export type CodingRunnerEventHandler = (event: CodingRunnerEventEnvelope) => void | Promise<void>
+
+export type CodingRunnerEventEnvelope
+  = | RunnerEvent<'run_started', {
+    workspacePath: string
+    taskGoal: string
+    maxSteps: number
+    stepTimeoutMs: number
+  }>
+  | RunnerEvent<'preflight_started', {
+    name: 'coding_review_workspace' | 'coding_capture_validation_baseline'
+  }>
+  | RunnerEvent<'preflight_completed', {
+    name: 'coding_review_workspace' | 'coding_capture_validation_baseline'
+    ok: boolean
+    error?: string
+  }>
+  | RunnerEvent<'step_started', {
+    stepIndex: number
+    maxSteps: number
+  }>
+  | RunnerEvent<'tool_call_started', {
+    toolName: string
+    argsSummary: string
+  }>
+  | RunnerEvent<'tool_call_completed', {
+    toolName: string
+    ok: boolean
+    status: string
+    summary: string
+    error?: string
+  }>
+  | RunnerEvent<'assistant_message', {
+    text: string
+  }>
+  | RunnerEvent<'step_timeout', {
+    stepIndex: number
+    timeoutMs: number
+  }>
+  | RunnerEvent<'report_status', {
+    status: 'completed' | 'failed' | 'blocked'
+    summary?: string
+  }>
+  | RunnerEvent<'run_finished', {
+    finalStatus: CodingRunnerResult['status']
+    totalSteps: number
+    error?: string
+  }>
+  | RunnerEvent<'run_crashed', {
+    totalSteps: number
+    error: string
+  }>
+
+export interface RunnerEvent<TKind extends string, TPayload> {
+  runId: string
+  seq: number
+  at: string
+  kind: TKind
+  payload: TPayload
 }

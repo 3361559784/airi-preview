@@ -1,4 +1,5 @@
+export { buildArchiveCandidates } from './candidates'
+export { archiveArtifactFilename, buildArchiveArtifact, serializeArchiveArtifact } from './serializer'
 export { ArchiveContextStore } from './store'
-export { buildArchiveArtifact, serializeArchiveArtifact, archiveArtifactFilename } from './serializer'
 export { buildDeduplicationKey } from './types'
-export type { ArchiveArtifact, ArchiveArtifactFrontmatter, ArchiveDeduplicationKey } from './types'
+export type { ArchiveArtifact, ArchiveArtifactFrontmatter, ArchiveCandidate, ArchiveDeduplicationKey, ArchiveSearchHit } from './types'

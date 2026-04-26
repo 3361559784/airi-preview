@@ -1,5 +1,5 @@
 /**
- * Transcript Store — append-only truth source for LLM conversation messages.
+ * Transcript Store - append-only truth source for LLM conversation messages.
  *
  * Persists to `transcript.jsonl` under the session root. Never mutates
  * or deletes existing entries. Prompt pruning is handled by the projection
@@ -10,13 +10,17 @@
 
 import type { TranscriptEntry, TranscriptToolCall } from './types'
 
-import { appendFile, mkdir, readFile } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { createInterface } from 'node:readline'
 
 export class TranscriptStore {
   private entries: TranscriptEntry[] = []
   private nextId = 0
   private initialized = false
+  private initPromise: Promise<void> | undefined
+  private appendQueue: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly filePath: string) {}
 
@@ -24,13 +28,27 @@ export class TranscriptStore {
     if (this.initialized)
       return
 
+    this.initPromise ??= this.initCommitted().finally(() => {
+      this.initPromise = undefined
+    })
+
+    await this.initPromise
+  }
+
+  private async initCommitted(): Promise<void> {
+    if (this.initialized)
+      return
+
     await mkdir(dirname(this.filePath), { recursive: true })
 
-    // Attempt to load existing transcript from disk
+    // Attempt to load existing transcript from disk without loading the full
+    // JSONL file into memory.
     try {
-      const raw = await readFile(this.filePath, 'utf-8')
-      const lines = raw.split('\n').filter(l => l.trim().length > 0)
-      for (const line of lines) {
+      const stream = createReadStream(this.filePath, { encoding: 'utf-8' })
+      const lines = createInterface({ input: stream, crlfDelay: Infinity })
+      for await (const line of lines) {
+        if (line.trim().length === 0)
+          continue
         try {
           const entry = JSON.parse(line) as TranscriptEntry
           this.entries.push(entry)
@@ -39,12 +57,15 @@ export class TranscriptStore {
           }
         }
         catch {
-          // Skip malformed lines — defensive against partial writes
+          // Skip malformed lines - defensive against partial writes.
         }
       }
     }
-    catch {
-      // File doesn't exist yet — that's fine for a fresh session
+    catch (error) {
+      if (getNodeErrorCode(error) !== 'ENOENT') {
+        throw error
+      }
+      // File does not exist yet - valid for a fresh session.
     }
 
     this.initialized = true
@@ -116,7 +137,12 @@ export class TranscriptStore {
     }
     else if (msg.role === 'tool') {
       const content = normalizeContent(msg.content)
-      return this.appendToolResult(msg.tool_call_id ?? '', content ?? '')
+      const toolCallId = typeof msg.tool_call_id === 'string'
+        ? msg.tool_call_id.trim()
+        : ''
+      if (!toolCallId)
+        return null
+      return this.appendToolResult(toolCallId, content ?? '')
     }
     else if (msg.role === 'user') {
       const content = normalizeContent(msg.content)
@@ -126,7 +152,7 @@ export class TranscriptStore {
       const content = normalizeContent(msg.content)
       return this.appendSystem(content ?? '')
     }
-    // Unknown role — skip silently
+    // Unknown role - skip silently.
     return null
   }
 
@@ -159,16 +185,34 @@ export class TranscriptStore {
   private async append(
     partial: Omit<TranscriptEntry, 'id' | 'at'>,
   ): Promise<TranscriptEntry> {
+    const pending = this.appendQueue.then(
+      async () => {
+        await this.init()
+        return this.appendCommitted(partial)
+      },
+      async () => {
+        await this.init()
+        return this.appendCommitted(partial)
+      },
+    )
+    this.appendQueue = pending.catch(() => undefined)
+    return pending
+  }
+
+  private async appendCommitted(
+    partial: Omit<TranscriptEntry, 'id' | 'at'>,
+  ): Promise<TranscriptEntry> {
     const entry: TranscriptEntry = {
       ...partial,
-      id: this.nextId++,
+      id: this.nextId,
       at: new Date().toISOString(),
     }
 
-    this.entries.push(entry)
-
-    // Persist — append-only JSONL
+    // Persist - append-only JSONL.
     await this.persist(entry)
+
+    this.entries.push(entry)
+    this.nextId++
 
     return entry
   }
@@ -189,7 +233,7 @@ export class TranscriptStore {
  */
 export class InMemoryTranscriptStore extends TranscriptStore {
   constructor() {
-    // Use a dummy path — init() and persist() are overridden to skip disk I/O
+    // Use a dummy path; init() and persist() are overridden to skip disk I/O.
     super('/dev/null/transcript.jsonl')
   }
 
@@ -219,4 +263,11 @@ function normalizeContent(content: unknown): string | unknown[] | undefined {
     return content
   // Fallback: coerce to string
   return String(content)
+}
+
+function getNodeErrorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error))
+    return undefined
+  const code = (error as { code?: unknown }).code
+  return typeof code === 'string' ? code : undefined
 }
