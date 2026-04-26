@@ -261,7 +261,7 @@ The mistake would be trying to "become Claude Code" in one jump. That would
  produce a worse, more coupled `computer-use-mcp`, not a stronger one.
 
 For the broader design translation, see
-[`claude-code-patterns-for-airi.md`](./claude-code-patterns-for-airi.md).
+[`claude-code-patterns-for-airi.release.md`](./claude-code-patterns-for-airi.release.md).
 
 ## Additional Near-Term Guidance
 

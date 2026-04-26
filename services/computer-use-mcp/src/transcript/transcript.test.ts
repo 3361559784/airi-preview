@@ -289,6 +289,59 @@ describe('parseTranscriptBlocks', () => {
       expect(blocks[1].entryIdRange[1]).toBe(4) // last tool result id
     }
   })
+
+  // Codex P1: duplicate tool result rows for the same tool_call_id (e.g. retry/replay)
+  // must be deduped at parse time so projection never emits two tool messages for one id.
+  // The fix skips duplicates (j++) rather than breaking, so later valid results are still consumed.
+  it('deduplicates tool results with the same toolCallId (retry/replay scenario)', () => {
+    resetIds()
+    const entries = [
+      userEntry('task'),
+      assistantWithTools(['tc1']),
+      toolResult('tc1', 'first result'),  // original
+      toolResult('tc1', 'retry result'),  // duplicate — must be skipped, not orphaned
+    ]
+
+    const blocks = parseTranscriptBlocks(entries)
+    // 2 blocks: user + tool_interaction (duplicate is silently consumed/skipped inside
+    // the tool-result loop, not left as an orphan TextBlock)
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0].kind).toBe('user')
+    expect(blocks[1].kind).toBe('tool_interaction')
+
+    if (blocks[1].kind === 'tool_interaction') {
+      // Key invariant: only one result survives in the block (first occurrence wins)
+      expect(blocks[1].toolResults).toHaveLength(1)
+      expect(blocks[1].toolResults[0].content).toBe('first result')
+    }
+  })
+
+  // Regression: [tc1, tc1(dup), tc2] — the duplicate must NOT cause tc2 to be orphaned.
+  // Previous fix broke the while-loop on duplicate, so tc2 was never attached to the block
+  // and isCompleteToolInteraction() would return false, causing projection to drop the block.
+  it('continues scanning after a duplicate tool result row (tc1, tc1-dup, tc2 scenario)', () => {
+    resetIds()
+    const entries = [
+      userEntry('task'),
+      assistantWithTools(['tc1', 'tc2']),
+      toolResult('tc1', 'first result'),
+      toolResult('tc1', 'retry dup'),    // duplicate — must be skipped, not break
+      toolResult('tc2', 'tc2 result'),  // must still be consumed into the same block
+    ]
+
+    const blocks = parseTranscriptBlocks(entries)
+    // 2 blocks: user + 1 complete tool_interaction (both tc1 and tc2 present)
+    expect(blocks).toHaveLength(2)
+    if (blocks[1].kind === 'tool_interaction') {
+      expect(blocks[1].toolResults).toHaveLength(2)
+      const ids = blocks[1].toolResults.map(r => r.toolCallId)
+      expect(ids).toContain('tc1')
+      expect(ids).toContain('tc2')
+      // First occurrence of tc1 wins; retry dup content is dropped
+      const tc1Result = blocks[1].toolResults.find(r => r.toolCallId === 'tc1')
+      expect(tc1Result?.content).toBe('first result')
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -640,6 +693,28 @@ describe('projectTranscript', () => {
     })
     expect(r2.metadata.compactedBlocks).toBeGreaterThan(0)
     expect(r2.metadata.projectedMessageCount).toBeLessThan(large.length)
+  })
+
+  it('deduplicates duplicate tool results in projected messages without orphaning later results', () => {
+    resetIds()
+    const entries = [
+      userEntry('task'),
+      assistantWithTools(['tc1', 'tc2']),
+      toolResult('tc1', 'first result'),
+      toolResult('tc1', 'retry dup'),
+      toolResult('tc2', 'tc2 result'),
+    ]
+
+    const result = projectTranscript(entries, baseOpts)
+    const toolMsgs = result.messages.filter(m => m.role === 'tool')
+    const toolCallIds = toolMsgs.map(m => m.tool_call_id)
+
+    expect(result.messages).toHaveLength(4)
+    expect(toolMsgs).toHaveLength(2)
+    expect(toolCallIds).toEqual(['tc1', 'tc2'])
+    expect(new Set(toolCallIds).size).toBe(toolCallIds.length)
+    expect(toolMsgs[0].content).toBe('first result')
+    expect(toolMsgs[1].content).toBe('tc2 result')
   })
 
   it('orphan tool messages are silently dropped from projected messages', () => {

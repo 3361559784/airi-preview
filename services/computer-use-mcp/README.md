@@ -87,6 +87,12 @@ capabilities into one observable, controllable task system.
 
 ## Tool Surface
 
+The list below is representative for the v1 operational path and not exhaustive.
+For the full set of public tools, query `tool_directory`:
+
+- `tool_directory` (no args): list all tools
+- `tool_directory` with `lane`, `kind`, `query`, `readOnlyOnly`, or `approvalRequiredOnly`: filtered listing
+
 Desktop observation and control:
 
 - `desktop_get_capabilities`
@@ -150,6 +156,15 @@ Workflow orchestration:
 - `workflow_resume`
   - resumes a workflow that paused on `approval_required`
 
+Additional families are available (not exhaustive):
+
+- `accessibility_snapshot`, `accessibility_find_element`
+  - optional AX tree read tools for diagnostics and deterministic targeting on macOS
+- `pty_get_status`, `pty_create`, `pty_send_input`, `pty_read_screen`, `pty_wait_for_output`, `pty_resize`, `pty_destroy_session`
+  - interactive PTY session lifecycle tools
+- `tool_search`
+  - lightweight tool descriptor search
+
 ## Policy Model
 
 The current macOS v1 boundary is intentionally narrow and explicit:
@@ -173,6 +188,22 @@ Core:
   - `actions` (default), `all`, `never`
 - `COMPUTER_USE_SESSION_ROOT`
   - local output directory for screenshots and `audit.jsonl`
+- `COMPUTER_USE_LAUNCH_HOST_PROCESS`
+  - process name shown in permission-chain diagnostics
+- `COMPUTER_USE_PERMISSION_CHAIN_HINT`
+  - custom hint for `permissionChainHint`
+- `COMPUTER_USE_ENABLE_TEST_TOOLS`
+  - set to true-like values (`1`, `true`, `yes`, `on`) to expose test tools such as `desktop_open_test_target` from descriptor set
+- `COMPUTER_USE_SESSION_TAG`
+  - binds the run to a session tag for remote execution and audit grouping
+- `COMPUTER_USE_REQUIRE_SESSION_TAG_FOR_MUTATIONS`
+  - `true` by default in `linux-x11`
+- `COMPUTER_USE_REQUIRE_ALLOWED_BOUNDS_FOR_MUTATIONS`
+  - `true` by default in `linux-x11`
+- `COMPUTER_USE_REQUIRE_COORDINATE_ALIGNMENT_FOR_MUTATIONS`
+  - `true` by default in `linux-x11`
+- `COMPUTER_USE_ALLOW_APPS`
+  - optional allow-list for legacy gating logic (empty by default)
 - `COMPUTER_USE_TIMEOUT_MS`
 - `COMPUTER_USE_DEFAULT_CAPTURE_AFTER`
 - `COMPUTER_USE_MAX_OPERATIONS`
@@ -182,7 +213,7 @@ Core:
 macOS orchestration:
 
 - `COMPUTER_USE_OPENABLE_APPS`
-  - default `Terminal,Cursor,Google Chrome`
+  - default `Finder,Terminal,Cursor,Visual Studio Code,Google Chrome`
 - `COMPUTER_USE_DENY_APPS`
   - default includes `1Password`, `Keychain`, `System Settings`, `Activity Monitor`, `AIRI`
 - `COMPUTER_USE_DENY_WINDOW_TITLES`
@@ -212,15 +243,72 @@ Legacy remote runner:
 - `COMPUTER_USE_REMOTE_OBSERVATION_BASE_URL`
 - `COMPUTER_USE_REMOTE_OBSERVATION_SERVE_PORT`
 - `COMPUTER_USE_REMOTE_OBSERVATION_TOKEN`
+- `COMPUTER_USE_REMOTE_ALLOW_PACKAGE_INSTALL`
+  - set to `1` to allow apt-based dependency installation during `bootstrap:remote`
 
 Binary overrides:
 
 - `COMPUTER_USE_SWIFT_BINARY`
 - `COMPUTER_USE_OSASCRIPT_BINARY`
 - `COMPUTER_USE_SCREENSHOT_BINARY`
+- `COMPUTER_USE_PBCOPY_BINARY`
+- `COMPUTER_USE_PBPASTE_BINARY`
 - `COMPUTER_USE_OPEN_BINARY`
 - `COMPUTER_USE_SSH_BINARY`
 - `COMPUTER_USE_TAR_BINARY`
+
+Browser-agent runtime:
+
+- `COMPUTER_USE_BROWSER_AGENT_ROOT`
+  - optional checkout root for the Python browser agent module
+- `COMPUTER_USE_PYTHON`
+  - python executable used by browser-agent subprocess
+- `CDP_URL`
+  - CDP/WebSocket endpoint for browser-agent; defaults to `http://localhost:9222` if unset
+
+## Runtime Artifacts
+
+All runs write machine-consumable artifacts to `COMPUTER_USE_SESSION_ROOT`:
+
+- `audit.jsonl`
+  - operational events and approvals
+- `transcript.jsonl`
+  - transcript stream for coding interactions
+- `archived-context/`
+  - compacted transcripts and checkpoint files
+- `screenshots/`
+  - screenshots captured by desktop tooling
+- optional `report.json` and `run-state.json`
+  - emitted by e2e/runner workflows that implement release evidence contracts
+
+## Local Launch Commands
+
+- `pnpm -F @proj-airi/computer-use-mcp start`
+  - run MCP server (stdio transport)
+- `pnpm -F @proj-airi/computer-use-mcp dev`
+  - dev run alias
+- `pnpm -F @proj-airi/computer-use-mcp smoke:stdio`
+- `pnpm -F @proj-airi/computer-use-mcp smoke:macos`
+
+Smoke/CI harness overrides:
+
+- `COMPUTER_USE_SMOKE_SERVER_COMMAND`
+- `COMPUTER_USE_SMOKE_SERVER_ARGS`
+- `COMPUTER_USE_SMOKE_SERVER_CWD`
+- `COMPUTER_USE_SMOKE_EXECUTOR`
+- `COMPUTER_USE_SMOKE_APPROVAL_MODE`
+- `COMPUTER_USE_SMOKE_SESSION_TAG`
+- `COMPUTER_USE_SMOKE_ALLOWED_BOUNDS`
+
+## Troubleshooting
+
+Common preflight blockers to check when actions do not execute:
+
+- `COMPUTER_USE_SESSION_TAG` required for remote mutation in strict mode
+- allowed bounds mismatch for `linux-x11` coordinate space checks
+- pending action approval not returned to AIRI
+- coordinate space not ready after a fresh screenshot
+- browser bridge not connected on localhost port 8765
 
 ## AIRI Integration
 
@@ -281,6 +369,26 @@ Legacy remote validation remains available:
 - `pnpm -F @proj-airi/computer-use-mcp bootstrap:remote`
 - `pnpm -F @proj-airi/computer-use-mcp smoke:remote`
 
+发版前验收优先按 `services/computer-use-mcp/测试.md` 的 staged 脚本执行：
+
+- `pnpm -F @proj-airi/computer-use-mcp verify:local`
+- `pnpm -F @proj-airi/computer-use-mcp verify:coding`
+- `pnpm -F @proj-airi/computer-use-mcp verify:terminal`
+- `pnpm -F @proj-airi/computer-use-mcp verify:browser-dom`
+
+发版机器可消费的结构化验收合同在：
+
+- `services/computer-use-mcp/测试.md`
+
+runner 输出必须至少包含：
+
+- `gateDecision`
+- `finalReportStatus`
+- `workflowOutcome`
+- `commands[]`（包含 exitCode 和覆盖范围标记）
+- `evidence`（`report.json`、`audit.jsonl`、`run-state.json`）
+- `environment` 块
+
 `bootstrap:remote` now defaults to dependency validation only. If the remote host
 is missing required X11/desktop runner packages, install them manually or rerun
 with `COMPUTER_USE_REMOTE_ALLOW_PACKAGE_INSTALL=1` to explicitly allow
@@ -336,7 +444,7 @@ Less convincing demos:
 ## Known Limits
 
 - macOS only for the main v1 path
-- no accessibility tree grounding yet
+- accessibility tree support exists via `accessibility_snapshot` / `accessibility_find_element`; DOM+native strategy remains incomplete across all app types
 - PTY/TUI terminal support is product-supported on the self-acquire mainline; legacy outward terminal reroute remains secondary
 - no multi-monitor orchestration policy yet
 - global coordinates are allowed, so the safety boundary is approval + audit, not strict app isolation

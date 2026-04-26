@@ -68,8 +68,10 @@ Main v1 story:
 
 - executor: `macos-local`
 - apps explicitly supported for open/focus by default:
+  - `Finder`
   - `Terminal`
   - `Cursor`
+  - `Visual Studio Code`
   - `Google Chrome`
 - safety boundary:
   - native approval dialogs
@@ -78,9 +80,21 @@ Main v1 story:
   - screenshot persistence
   - operation budgets
 
+Current terminal boundary (from `src/support-matrix.ts`):
+
+- `terminal_exec` is product-supported for non-interactive exec.
+- `terminal_pty` and `terminal_pty_self_acquire` are product-supported as the interactive mainline.
+- `terminal_exec_to_pty_reroute` is covered and explicitly marked as legacy fallback in the matrix label.
+- `terminal_auto_surface_resolution` and `terminal_pty_step_family` are covered and remain part of the lane contract.
+- `terminal_pty_open_grant` and `terminal_pty_audit` remain covered, while strict proof is expected on the matrix `product-supported` gates.
+
+Historical path vs current path:
+
+- Historical outward reroute and harness-side assumptions are retained only as backup lanes.
+- Current product flow is workflow-owned PTY self-acquire when the surface resolves to PTY.
+
 Explicit non-goals of this pass:
 
-- PTY/TUI terminal automation
 - deep accessibility tree grounding
 - strict app-level UI sandboxing
 - remote sandbox hosting for other users

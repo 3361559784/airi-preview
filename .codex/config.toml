@@ -1,0 +1,6 @@
+model = "gpt-5.5"
+model_reasoning_effort = "xhigh"
+
+[agents]
+max_threads = 9
+max_depth = 2

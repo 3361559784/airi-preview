@@ -5,6 +5,7 @@
 - Keep changes narrow and evidence-backed.
 - Do not touch desktop overlay, Electron bridge, Chrome extension, MCP handler registration, workspace memory, verification gate, or shell guard unless the task explicitly requires it.
 - Keep documentation/config changes separate from runtime logic changes.
+- Additional human/controller handoff notes live in `./agent.md`. Treat that file as supporting context, not as a guaranteed auto-loaded tool instruction entrypoint.
 
 ## Transcript, archive, and retention rules
 

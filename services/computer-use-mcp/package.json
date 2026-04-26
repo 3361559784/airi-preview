@@ -47,7 +47,11 @@
     "mcp:inspector": "pnpx @modelcontextprotocol/inspector pnpm -F @proj-airi/computer-use-mcp start",
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config ./vitest.config.ts"
+    "test": "vitest run --config ./vitest.config.ts",
+    "verify:local": "pnpm run typecheck && pnpm run test",
+    "verify:coding": "pnpm run typecheck && pnpm run test && pnpm run e2e:coding-workflow",
+    "verify:terminal": "pnpm run typecheck && pnpm run test && pnpm run e2e:terminal-exec",
+    "verify:browser-dom": "pnpm run typecheck && pnpm run test && pnpm run e2e:browser-reroute"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "catalog:",

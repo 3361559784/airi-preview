@@ -1,0 +1,21 @@
+name = "mini_test_finder"
+description = "Fallback read-only test coverage scout using GPT-5.4-mini."
+
+model = "gpt-5.4-mini"
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+
+developer_instructions = """
+Stay read-only.
+Inspect existing tests and nearby implementation only.
+Identify missing positive, negative, and regression tests with concrete file references.
+Prefer narrow regression tests over broad integration tests.
+Do not edit files.
+
+Output format:
+1. Existing coverage
+2. Missing coverage
+3. Smallest recommended test
+4. Tests that should remain green
+5. Uncertainty
+"""
