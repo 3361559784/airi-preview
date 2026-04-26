@@ -116,7 +116,7 @@ export class CodingRunnerImpl implements CodingRunner {
       runId,
       source: 'task-start',
       sourceIndex: 0,
-      extraction: buildTaskStartMemory(taskGoal, workspacePath),
+      extraction: buildTaskStartMemory(taskGoal, workspacePath, taskKind),
     })
 
     await transcriptStore.appendUser(taskGoal)

@@ -25,7 +25,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from 'node:process'
@@ -104,6 +104,31 @@ async function createWorkspaceFixture() {
   ].join('\n')
 
   await writeFile(join(workspace, 'check.js'), checkContent, 'utf8')
+
+  return workspace
+}
+
+async function createAnalysisReportFixture() {
+  const workspace = await mkdtemp(join(tmpdir(), 'xsai-governor-analysis-eval-'))
+  await mkdir(join(workspace, 'src'), { recursive: true })
+
+  await writeFile(join(workspace, 'README.md'), [
+    '# Greeting Fixture',
+    '',
+    'This package exposes a small greeting helper used by the AIRI coding runner live eval.',
+    'The task is analysis-only: no source file should be modified.',
+  ].join('\n'), 'utf8')
+
+  await writeFile(join(workspace, 'src', 'greeter.ts'), [
+    'export interface GreetingOptions {',
+    '  excited?: boolean',
+    '}',
+    '',
+    'export function createGreeting(name: string, options: GreetingOptions = {}) {',
+    '  const suffix = options.excited ? "!" : "."',
+    '  return "Hello, " + name + suffix',
+    '}',
+  ].join('\n'), 'utf8')
 
   return workspace
 }
@@ -241,6 +266,37 @@ async function runCompare() {
     console.error('Coding Runner crashed:', error)
   }
 
+  const includeAnalysisReport = env.AIRI_EVAL_INCLUDE_ANALYSIS_REPORT === '1'
+  let resultC: CallToolResult | undefined
+  if (includeAnalysisReport) {
+    const workspaceC = await createAnalysisReportFixture()
+    const runtimeC = createRuntime(workspaceC)
+    const executeActionC = createExecuteAction(runtimeC)
+    const mockServerC = createMockServer()
+    registerComputerUseTools({ server: mockServerC.server, runtime: runtimeC, executeAction: executeActionC, enableTestTools: false })
+
+    console.log('\n--- Running workflow_coding_runner (Analysis Report) ---')
+    console.log('Workspace:', workspaceC)
+    try {
+      resultC = await mockServerC.invoke('workflow_coding_runner', {
+        workspacePath: workspaceC,
+        taskKind: 'analysis_report',
+        maxSteps: 10,
+        taskGoal: [
+          'Produce a source-backed analysis report for this fixture.',
+          'Do not edit files.',
+          'Read README.md and src/greeter.ts.',
+          'Explain what createGreeting returns and whether any code change is required.',
+          'Before reporting completion, create a structured analysis artifact with coding_compress_context.',
+          'Then call coding_report_status(completed) with filesTouched: [] and a substantive summary.',
+        ].join(' '),
+      })
+    }
+    catch (error) {
+      console.error('Analysis Report Coding Runner crashed:', error)
+    }
+  }
+
   console.log('\n=======================================')
   console.log('         EVALUATION REPORT             ')
   console.log('=======================================')
@@ -254,6 +310,14 @@ async function runCompare() {
       isError: resultB?.isError,
       structuredContent: resultB?.structuredContent,
     },
+    ...(includeAnalysisReport
+      ? {
+          analysisReportRunner: {
+            isError: resultC?.isError,
+            structuredContent: resultC?.structuredContent,
+          },
+        }
+      : {}),
   }
 
   console.log(JSON.stringify(report, null, 2))
@@ -261,6 +325,12 @@ async function runCompare() {
   // Evaluation Assertions
   const aStatus = (resultA?.structuredContent as any)?.status
   const bStatus = (resultB?.structuredContent as any)?.status
+  const cStatus = (resultC?.structuredContent as any)?.status
+
+  if (includeAnalysisReport && cStatus !== 'completed') {
+    console.log('\n[FAIL] Analysis/report coding runner did not successfully complete the task.')
+    process.exit(1)
+  }
 
   if (aStatus === 'completed' && bStatus === 'completed') {
     console.log('\n[PASS] Both successfully passed. Agentic loop recovered against expectation.')

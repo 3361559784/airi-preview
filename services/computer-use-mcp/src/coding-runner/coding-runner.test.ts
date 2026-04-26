@@ -464,6 +464,10 @@ describe('codingRunner', () => {
     mockRuntime.stateManager.getState.mockImplementation(() => state)
 
     vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      expect(opts.system).toContain('For analysis/report tasks, do not edit files')
+      expect(opts.system).toContain('filesTouched empty')
+      expect(opts.system).not.toContain('For edit tasks, complete by applying changes')
+
       state.coding.lastCodingReport = {
         status: 'completed',
         summary: 'Workspace analysis completed with source-backed report evidence.',

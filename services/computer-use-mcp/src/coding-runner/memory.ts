@@ -1,4 +1,5 @@
 import type { ComputerUseServerRuntime } from '../server/runtime'
+import type { CodingTaskKind } from '../state'
 import type { TaskMemoryExtraction } from '../task-memory/types'
 
 export function syncCodingRunnerTaskMemory(params: {
@@ -17,7 +18,9 @@ export function syncCodingRunnerTaskMemory(params: {
     params.runtime.stateManager.updateTaskMemory(result.taskMemory)
 }
 
-export function buildTaskStartMemory(taskGoal: string, workspacePath: string): TaskMemoryExtraction {
+export function buildTaskStartMemory(taskGoal: string, workspacePath: string, taskKind: CodingTaskKind = 'edit'): TaskMemoryExtraction {
+  const isAnalysisReport = taskKind === 'analysis_report'
+
   return {
     status: 'active',
     goal: taskGoal,
@@ -25,12 +28,20 @@ export function buildTaskStartMemory(taskGoal: string, workspacePath: string): T
       `Workspace root: ${workspacePath}`,
       'coding_review_workspace and coding_capture_validation_baseline already completed before the model loop.',
     ],
-    currentStep: 'Bootstrap and inspect workspace',
-    completionCriteria: [
-      'For edit tasks, complete by applying changes with coding_apply_patch, running a relevant validation command, calling coding_review_changes, then calling coding_report_status.',
-      'Do not call coding_report_status(completed) until validation and coding_review_changes both support completion.',
-    ],
-    nextStep: 'Use coding search/read/edit tools inside the reviewed workspace; do not re-review or switch workspace roots.',
+    currentStep: isAnalysisReport ? 'Bootstrap and inspect workspace for analysis/report' : 'Bootstrap and inspect workspace',
+    completionCriteria: isAnalysisReport
+      ? [
+          'For analysis/report tasks, do not edit files and do not call coding_apply_patch.',
+          'Read or search source files, create a structured analysis artifact with coding_compress_context or impact/investigation evidence, then call coding_report_status(completed) with filesTouched empty.',
+          'Do not call coding_report_status(completed) until the report summary is source-backed and substantive.',
+        ]
+      : [
+          'For edit tasks, complete by applying changes with coding_apply_patch, running a relevant validation command, calling coding_review_changes, then calling coding_report_status.',
+          'Do not call coding_report_status(completed) until validation and coding_review_changes both support completion.',
+        ],
+    nextStep: isAnalysisReport
+      ? 'Use coding search/read/analysis tools inside the reviewed workspace; do not edit files, re-review, or switch workspace roots.'
+      : 'Use coding search/read/edit tools inside the reviewed workspace; do not re-review or switch workspace roots.',
   }
 }
 
