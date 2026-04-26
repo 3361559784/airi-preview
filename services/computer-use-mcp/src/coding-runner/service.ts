@@ -6,6 +6,7 @@ import { errorMessageFrom } from '@moeru/std'
 import { generateText } from '@xsai/generate-text'
 
 import { createCodingRunnerEventEmitter } from './events'
+import { buildReportStatusMemory, buildStepMemory, buildTaskStartMemory, syncCodingRunnerTaskMemory } from './memory'
 import { buildXsaiCodingTools } from './tool-runtime'
 import { createTranscriptRuntime, projectForCodingTurn } from './transcript-runtime'
 
@@ -97,6 +98,14 @@ export class CodingRunnerImpl implements CodingRunner {
       })
     }
 
+    syncCodingRunnerTaskMemory({
+      runtime,
+      runId,
+      source: 'task-start',
+      sourceIndex: 0,
+      extraction: buildTaskStartMemory(taskGoal),
+    })
+
     await transcriptStore.appendUser(taskGoal)
 
     let totalSteps = 0
@@ -110,6 +119,13 @@ export class CodingRunnerImpl implements CodingRunner {
         const controller = new AbortController()
         const timeoutId = setTimeout(() => controller.abort(new Error('STEP_TIMEOUT')), actualStepTimeoutMs)
         await events.emit('step_started', { stepIndex: step + 1, maxSteps: actualMaxSteps })
+        syncCodingRunnerTaskMemory({
+          runtime,
+          runId,
+          source: `step-${step + 1}`,
+          sourceIndex: (step + 1) * 10,
+          extraction: buildStepMemory(step + 1, actualMaxSteps),
+        })
 
         const projection = projectForCodingTurn(transcriptStore, this.config.systemPromptBase, runtime)
         const projectedLength = projection.messages.length
@@ -179,9 +195,25 @@ export class CodingRunnerImpl implements CodingRunner {
 
             if (toolName === 'coding_report_status') {
               if (parsedStatus && ['completed', 'failed', 'blocked'].includes(parsedStatus)) {
+                const status = parsedStatus as 'completed' | 'failed' | 'blocked'
+                const reportArgs = isRecord(toolArgs) ? toolArgs : {}
+                syncCodingRunnerTaskMemory({
+                  runtime,
+                  runId,
+                  source: `report-${step + 1}`,
+                  sourceIndex: (step + 1) * 10 + 1,
+                  extraction: buildReportStatusMemory({
+                    status,
+                    summary: stringValue(reportArgs.summary),
+                    filesTouched: stringArrayValue(reportArgs.filesTouched),
+                    commandsRun: stringArrayValue(reportArgs.commandsRun),
+                    checks: stringArrayValue(reportArgs.checks),
+                    nextStep: stringValue(reportArgs.nextStep),
+                  }),
+                })
                 await events.emit('report_status', {
-                  status: parsedStatus as 'completed' | 'failed' | 'blocked',
-                  summary: typeof toolArgs?.summary === 'string' ? toolArgs.summary : undefined,
+                  status,
+                  summary: stringValue(reportArgs.summary),
                 })
                 finalStatus = parsedStatus === 'completed' ? 'completed' : 'failed'
                 break
@@ -230,4 +262,19 @@ export class CodingRunnerImpl implements CodingRunner {
 
 export function createCodingRunner(config: CodingRunnerConfig, deps: CodingRunnerDependencies): CodingRunner {
   return new CodingRunnerImpl(config, deps)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined
+}
+
+function stringArrayValue(value: unknown): string[] | undefined {
+  if (!Array.isArray(value))
+    return undefined
+  const strings = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  return strings.length > 0 ? strings : undefined
 }

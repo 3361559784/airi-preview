@@ -1,5 +1,6 @@
 export * from './config'
 export * from './events'
+export * from './memory'
 export * from './service'
 export * from './tool-runtime'
 export * from './transcript-runtime'

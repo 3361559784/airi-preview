@@ -10,6 +10,7 @@ import * as xsaiGenerate from '@xsai/generate-text'
 import * as xsaiTool from '@xsai/tool'
 
 import { ArchiveContextStore } from '../archived-context/store'
+import { TaskMemoryManager } from '../task-memory/manager'
 import { InMemoryTranscriptStore, TranscriptStore } from '../transcript/store'
 import { createCodingRunnerEventEmitter } from './events'
 import { createCodingRunner } from './service'
@@ -43,19 +44,19 @@ describe('codingRunner', () => {
   }
 
   const createMockDeps = () => {
+    const taskMemory = new TaskMemoryManager()
     const mockRuntime = {
       config: {
         sessionRoot: '/tmp/phony_test_session',
       },
       stateManager: {
         getState: vi.fn().mockReturnValue({}),
+        updateTaskMemory: vi.fn(),
       },
       session: {
         getRecentTrace: vi.fn().mockReturnValue([]),
       },
-      taskMemory: {
-        toContextString: vi.fn().mockReturnValue('mock_task_memory_content'),
-      },
+      taskMemory,
     } as any
 
     const mockExecuteAction = vi.fn().mockImplementation(async (action: any) => {
@@ -91,8 +92,8 @@ describe('codingRunner', () => {
     const { mockRuntime, mockExecuteAction } = createMockDeps()
 
     vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
-      // Assert that taskMemoryString is injected into the system prompt
-      expect(opts.system).toContain('mock_task_memory_content')
+      // Assert that runner-owned task memory is injected into the system prompt.
+      expect(opts.system).toContain('Goal: Complete the task')
 
       return {
         messages: [
@@ -121,6 +122,66 @@ describe('codingRunner', () => {
     expect(result.turns.length).toBeGreaterThan(0)
     expect(result.turns.at(-1)?.toolName).toBe('coding_report_status')
     expect(result.transcriptMetadata).toBeDefined()
+  })
+
+  it('syncs task memory from task start and coding_report_status', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => ({
+      messages: [
+        ...opts.messages,
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_123',
+            function: {
+              name: 'coding_report_status',
+              arguments: JSON.stringify({
+                status: 'completed',
+                summary: 'implemented safely',
+                filesTouched: ['src/a.ts'],
+                commandsRun: ['pnpm test'],
+                checks: ['unit tests passed'],
+                nextStep: '',
+              }),
+            },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_123',
+          content: JSON.stringify({
+            tool: 'coding_report_status',
+            args: {
+              status: 'completed',
+              summary: 'implemented safely',
+              filesTouched: ['src/a.ts'],
+              commandsRun: ['pnpm test'],
+              checks: ['unit tests passed'],
+              nextStep: '',
+            },
+            ok: true,
+            status: 'completed',
+          }),
+        },
+      ],
+    }) as any)
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Wire memory' })
+
+    expect(result.status).toBe('completed')
+    expect(mockRuntime.taskMemory.get()).toMatchObject({
+      status: 'done',
+      goal: 'Wire memory',
+      confirmedFacts: ['unit tests passed'],
+      artifacts: [
+        { label: 'src/a.ts', value: 'src/a.ts', kind: 'file' },
+        { label: 'pnpm test', value: 'pnpm test', kind: 'tool' },
+      ],
+    })
+    expect(mockRuntime.stateManager.updateTaskMemory).toHaveBeenCalled()
   })
 
   it('emits monotonic runner lifecycle events for a completed task', async () => {

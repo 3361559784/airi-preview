@@ -7,6 +7,20 @@ import type { ComputerUseServerRuntime } from './runtime'
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import * as xsaiGenerate from '@xsai/generate-text'
+import * as xsaiTool from '@xsai/tool'
+
+import { RunStateManager } from '../state'
+import { TaskMemoryManager } from '../task-memory/manager'
+import {
+  createDisplayInfo,
+  createLocalExecutionTarget,
+  createTerminalState,
+  createTestConfig,
+} from '../test-fixtures'
+import { registerComputerUseTools } from './register-tools'
+import { createRuntimeCoordinator } from './runtime-coordinator'
+
 vi.mock('@xsai/generate-text', async () => {
   const actual = await vi.importActual<typeof import('@xsai/generate-text')>('@xsai/generate-text')
   return {
@@ -22,18 +36,6 @@ vi.mock('@xsai/tool', async () => {
     tool: vi.fn(),
   }
 })
-
-import { RunStateManager } from '../state'
-import {
-  createDisplayInfo,
-  createLocalExecutionTarget,
-  createTerminalState,
-  createTestConfig,
-} from '../test-fixtures'
-import { registerComputerUseTools } from './register-tools'
-import { createRuntimeCoordinator } from './runtime-coordinator'
-import * as xsaiGenerate from '@xsai/generate-text'
-import * as xsaiTool from '@xsai/tool'
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<CallToolResult>
 
@@ -58,7 +60,7 @@ function createMockServer() {
     },
     hasTool(name: string) {
       return handlers.has(name)
-    }
+    },
   }
 }
 
@@ -119,9 +121,7 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
           connectable: false,
         }),
       },
-      taskMemory: {
-        toContextString: vi.fn().mockReturnValue('mock_task_memory_content'),
-      },
+      taskMemory: new TaskMemoryManager(),
     } as unknown as ComputerUseServerRuntime
     runtime.coordinator = createRuntimeCoordinator(runtime)
 
@@ -142,7 +142,7 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
           tool_call_id: 'call_123',
           content: JSON.stringify({ tool: 'coding_report_status', args: { status: 'completed' }, ok: true, status: 'completed' }),
         },
-      ]
+      ],
     }) as any)
 
     vi.mocked(xsaiTool.tool).mockReset()
@@ -181,7 +181,7 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
 
     expect(result.isError).toBe(false)
     const structured = result.structuredContent as Record<string, any>
-    
+
     // Returns structural values
     expect(structured.status).toBe('completed')
     expect(structured.totalSteps).toBeGreaterThanOrEqual(1)
@@ -191,16 +191,16 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
     const actionKinds = executeAction.mock.calls.map(call => call[0].kind)
     expect(actionKinds[0]).toBe('coding_review_workspace')
     expect(actionKinds[1]).toBe('coding_capture_validation_baseline')
-    
+
     expect(executeAction.mock.calls[0][0]).toMatchObject({
       kind: 'coding_review_workspace',
-      input: { workspacePath: '/tmp/project' }
+      input: { workspacePath: '/tmp/project' },
     })
     expect(executeAction.mock.calls[0][1]).toBe('coding_review_workspace')
 
     expect(executeAction.mock.calls[1][0]).toMatchObject({
       kind: 'coding_capture_validation_baseline',
-      input: { workspacePath: '/tmp/project', createTemporaryWorktree: true }
+      input: { workspacePath: '/tmp/project', createTemporaryWorktree: true },
     })
     expect(executeAction.mock.calls[1][1]).toBe('coding_capture_validation_baseline')
   })
@@ -212,7 +212,7 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
       }
       return makeExecutedResult(action)
     })
-    
+
     const { server, invoke } = createMockServer()
 
     registerComputerUseTools({
