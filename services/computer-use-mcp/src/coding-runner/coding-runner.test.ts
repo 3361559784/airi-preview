@@ -257,6 +257,7 @@ describe('codingRunner', () => {
     expect(result.status).toBe('failed')
     expect(result.error).toContain('Verification Gate blocked completion')
     expect(result.error).toContain('reason=review_missing')
+    expect(result.error).not.toContain('BUDGET_EXHAUSTED')
     expect(mockRuntime.taskMemory.get()?.recentFailureReason).toContain('Verification Gate blocked completion')
     expect(events.map(event => event.kind)).toContain('report_status')
     expect(events).toContainEqual(expect.objectContaining({
@@ -513,7 +514,8 @@ describe('codingRunner', () => {
       },
     })
 
-    expect(result.status).toBe('timeout')
+    expect(result.status).toBe('failed')
+    expect(result.error).toContain('BUDGET_EXHAUSTED')
     expect(result.turns.at(-1)).toMatchObject({
       role: 'tool',
       toolName: 'coding_report_status',
@@ -563,7 +565,8 @@ describe('codingRunner', () => {
       },
     })
 
-    expect(result.status).toBe('timeout')
+    expect(result.status).toBe('failed')
+    expect(result.error).toContain('BUDGET_EXHAUSTED')
     expect(result.turns.at(-1)).toMatchObject({
       role: 'tool',
       toolName: 'coding_report_status',
@@ -572,6 +575,192 @@ describe('codingRunner', () => {
     expect(mockRuntime.taskMemory.get()?.recentFailureReason).toContain('auto filesTouched lacks verifiable mutation proofs')
     expect(events.map(event => event.kind)).not.toContain('report_status')
     expect(events.map(event => event.kind)).not.toContain('verification_gate_evaluated')
+  })
+
+  it('fails with BUDGET_EXHAUSTED when maxSteps ends without an accepted report', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const events: CodingRunnerEventEnvelope[] = []
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => ({
+      messages: [
+        ...opts.messages,
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_read',
+            function: { name: 'coding_read_file', arguments: '{}' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_read',
+          content: JSON.stringify({ tool: 'coding_read_file', ok: true, status: 'ok' }),
+        },
+      ],
+    }) as any)
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Read forever',
+      maxSteps: 1,
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toContain('BUDGET_EXHAUSTED')
+    expect(events.map(event => event.kind)).toEqual([
+      'run_started',
+      'preflight_started',
+      'preflight_completed',
+      'preflight_started',
+      'preflight_completed',
+      'step_started',
+      'budget_exhausted',
+      'run_finished',
+    ])
+    expect(events.at(-2)).toMatchObject({
+      kind: 'budget_exhausted',
+      payload: {
+        maxSteps: 1,
+        totalSteps: 1,
+        acceptedReportSeen: false,
+        lastToolName: 'coding_read_file',
+      },
+    })
+    expect(events.at(-1)).toMatchObject({
+      kind: 'run_finished',
+      payload: expect.objectContaining({
+        finalStatus: 'failed',
+        error: expect.stringContaining('BUDGET_EXHAUSTED'),
+      }),
+    })
+  })
+
+  it('keeps single-step timeout separate from budget exhaustion', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const events: CodingRunnerEventEnvelope[] = []
+
+    vi.mocked(xsaiGenerate.generateText).mockRejectedValue(new Error('STEP_TIMEOUT'))
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Timeout once',
+      maxSteps: 1,
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(result.status).toBe('timeout')
+    expect(result.error).toBeUndefined()
+    expect(events.map(event => event.kind)).toContain('step_timeout')
+    expect(events.map(event => event.kind)).not.toContain('budget_exhausted')
+    expect(events.at(-1)).toMatchObject({
+      kind: 'run_finished',
+      payload: { finalStatus: 'timeout' },
+    })
+  })
+
+  it('injects second-to-last and final-step budget pressure into task memory context', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const systems: string[] = []
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount++
+      systems.push(opts.system)
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: `call_read_${callCount}`,
+              function: { name: 'coding_read_file', arguments: '{}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: `call_read_${callCount}`,
+            content: JSON.stringify({ tool: 'coding_read_file', ok: true, status: 'ok' }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Use every step',
+      maxSteps: 2,
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toContain('BUDGET_EXHAUSTED')
+    expect(systems).toHaveLength(2)
+    expect(systems[0]).toContain('Only 2 runner steps remain')
+    expect(systems[0]).toContain('perform at most one high-value validation')
+    expect(systems[1]).toContain('Final coding runner step 2/2')
+    expect(systems[1]).toContain('Do not start new exploration')
+  })
+
+  it('includes truncated last failure summary when tool failure is followed by budget exhaustion', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const longError = `PATCH_MISMATCH: ${'x'.repeat(900)}`
+    const events: CodingRunnerEventEnvelope[] = []
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => ({
+      messages: [
+        ...opts.messages,
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_patch',
+            function: { name: 'coding_apply_patch', arguments: '{}' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_patch',
+          content: JSON.stringify({
+            tool: 'coding_apply_patch',
+            ok: false,
+            status: 'failed',
+            error: longError,
+          }),
+        },
+      ],
+    }) as any)
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Fail once and exhaust',
+      maxSteps: 1,
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    const budgetEvent = events.find(event => event.kind === 'budget_exhausted')
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toContain('BUDGET_EXHAUSTED')
+    expect(result.error!.length).toBeLessThan(700)
+    expect(budgetEvent).toMatchObject({
+      payload: expect.objectContaining({
+        lastToolName: 'coding_apply_patch',
+      }),
+    })
+    expect((budgetEvent!.payload as any).lastFailureSummary.length).toBe(500)
+    expect(mockRuntime.taskMemory.get()?.recentFailureReason).toContain('BUDGET_EXHAUSTED')
   })
 
   it('syncs task memory from task start and coding_report_status', async () => {
@@ -932,7 +1121,84 @@ describe('codingRunner', () => {
 
     expect(result.totalSteps).toBe(2)
     expect(result.status).toBe('failed') // derived cleanly from parsed tool payload 'status'
+    expect(result.error).toBeUndefined()
     expect(result.turns.length).toBe(2)
+  })
+
+  it('maps accepted blocked report to ordinary failed status, not budget exhaustion', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => ({
+      messages: [
+        ...opts.messages,
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_blocked',
+            function: { name: 'coding_report_status', arguments: '{"status":"blocked"}' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_blocked',
+          content: JSON.stringify({
+            tool: 'coding_report_status',
+            args: { status: 'blocked', summary: 'blocked by missing context' },
+            ok: true,
+            status: 'blocked',
+          }),
+        },
+      ],
+    }) as any)
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Report blocked', maxSteps: 1 })
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toBeUndefined()
+    expect(result.turns.at(-1)).toMatchObject({
+      toolName: 'coding_report_status',
+      resultOk: true,
+    })
+  })
+
+  it('maps accepted failed report on the last step to ordinary failed status, not budget exhaustion', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => ({
+      messages: [
+        ...opts.messages,
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_failed',
+            function: { name: 'coding_report_status', arguments: '{"status":"failed"}' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_failed',
+          content: JSON.stringify({
+            tool: 'coding_report_status',
+            args: { status: 'failed', summary: 'validation failed' },
+            ok: true,
+            status: 'failed',
+          }),
+        },
+      ],
+    }) as any)
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Report failed', maxSteps: 1 })
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toBeUndefined()
+    expect(result.turns.at(-1)).toMatchObject({
+      toolName: 'coding_report_status',
+      resultOk: true,
+    })
   })
 
   it('injects failed tool results into next-step task memory for recovery', async () => {

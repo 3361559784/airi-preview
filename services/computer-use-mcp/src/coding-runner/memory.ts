@@ -33,6 +33,44 @@ export function buildStepMemory(stepIndex: number, maxSteps: number): TaskMemory
   }
 }
 
+export function buildBudgetPressureMemory(stepIndex: number, maxSteps: number): TaskMemoryExtraction {
+  const remainingStepsIncludingCurrent = maxSteps - stepIndex
+
+  if (remainingStepsIncludingCurrent <= 1) {
+    return {
+      status: 'active',
+      currentStep: `Final coding runner step ${stepIndex + 1}/${maxSteps}`,
+      recentFailureReason: 'Runner step budget is at the final step; broad exploration can no longer be recovered within this run.',
+      nextStep: 'Do not start new exploration. Call coding_report_status(completed) only if runtime evidence supports it; otherwise report failed or blocked.',
+    }
+  }
+
+  return {
+    status: 'active',
+    currentStep: `Coding runner budget pressure: step ${stepIndex + 1}/${maxSteps}`,
+    recentFailureReason: `Only ${remainingStepsIncludingCurrent} runner steps remain, so repeated exploration risks budget exhaustion.`,
+    nextStep: 'Stop broad exploration. If evidence is missing, perform at most one high-value validation or final check; otherwise prepare the final report.',
+  }
+}
+
+export function buildBudgetExhaustedMemory(params: {
+  maxSteps: number
+  lastToolName?: string
+  lastFailureSummary?: string
+}): TaskMemoryExtraction {
+  const suffix = params.lastToolName
+    ? ` Last tool: ${params.lastToolName}${params.lastFailureSummary ? ` — ${params.lastFailureSummary}` : ''}`
+    : ''
+
+  return {
+    status: 'blocked',
+    currentStep: 'Coding runner stopped after exhausting its step budget',
+    blockers: [`BUDGET_EXHAUSTED: runner reached maxSteps=${params.maxSteps} without an accepted terminal report.${suffix}`],
+    recentFailureReason: `BUDGET_EXHAUSTED: maxSteps=${params.maxSteps}.${suffix}`,
+    nextStep: 'Start a fresh run with narrower scope or report failed/blocked earlier when evidence is insufficient.',
+  }
+}
+
 export function buildToolFailureMemory(params: {
   toolName: string
   summary: string

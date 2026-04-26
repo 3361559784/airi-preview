@@ -11,7 +11,7 @@ import { generateText } from '@xsai/generate-text'
 
 import { evaluateCodingVerificationGate } from '../coding/verification-gate'
 import { createCodingRunnerEventEmitter } from './events'
-import { buildReportStatusMemory, buildStepMemory, buildTaskStartMemory, buildToolFailureMemory, syncCodingRunnerTaskMemory } from './memory'
+import { buildBudgetExhaustedMemory, buildBudgetPressureMemory, buildReportStatusMemory, buildStepMemory, buildTaskStartMemory, buildToolFailureMemory, syncCodingRunnerTaskMemory } from './memory'
 import { buildXsaiCodingTools } from './tool-runtime'
 import { createTranscriptRuntime, projectForCodingTurn } from './transcript-runtime'
 
@@ -124,6 +124,10 @@ export class CodingRunnerImpl implements CodingRunner {
     let totalSteps = 0
     let finalStatus: CodingRunnerResult['status'] = 'timeout'
     let finalError: string | undefined
+    let exitReason: CodingRunnerExitReason = 'none'
+    let acceptedReportSeen = false
+    let lastToolName: string | undefined
+    let lastFailureSummary: string | undefined
     const turns: CodingRunnerTurnResult[] = []
 
     try {
@@ -140,6 +144,15 @@ export class CodingRunnerImpl implements CodingRunner {
           sourceIndex: (step + 1) * 10,
           extraction: buildStepMemory(step + 1, actualMaxSteps),
         })
+        if (actualMaxSteps - step <= 2) {
+          syncCodingRunnerTaskMemory({
+            runtime,
+            runId,
+            source: `budget-pressure-${step + 1}`,
+            sourceIndex: (step + 1) * 10 + 1,
+            extraction: buildBudgetPressureMemory(step, actualMaxSteps),
+          })
+        }
 
         const workspaceMemoryContext = workspaceMemoryStore.toContextString(taskGoal)
         const projection = projectForCodingTurn(transcriptStore, this.config.systemPromptBase, runtime, {
@@ -172,6 +185,7 @@ export class CodingRunnerImpl implements CodingRunner {
           clearTimeout(timeoutId)
           if (stepErr?.message?.includes('STEP_TIMEOUT') || stepErr?.name === 'AbortError') {
             finalStatus = 'timeout'
+            exitReason = 'step_timeout'
             turns.push({ role: 'timeout' })
             await events.emit('step_timeout', { stepIndex: step + 1, timeoutMs: actualStepTimeoutMs })
             break
@@ -211,28 +225,32 @@ export class CodingRunnerImpl implements CodingRunner {
               resultOk,
               rawText: lastContent,
             })
+            lastToolName = toolName
 
             if (!resultOk) {
+              lastFailureSummary = clampFailureSummary(failureSummary ?? lastContent)
               syncCodingRunnerTaskMemory({
                 runtime,
                 runId,
                 source: `tool-failure-${step + 1}`,
-                sourceIndex: (step + 1) * 10 + 1,
+                sourceIndex: (step + 1) * 10 + 2,
                 extraction: buildToolFailureMemory({
                   toolName,
-                  summary: failureSummary ?? lastContent.slice(0, 500),
+                  summary: lastFailureSummary,
                 }),
               })
             }
 
             if (toolName === 'coding_report_status') {
               if (resultOk && reportStatus) {
+                acceptedReportSeen = true
+                exitReason = 'accepted_report'
                 const reportArgs = isRecord(toolArgs) ? toolArgs : {}
                 syncCodingRunnerTaskMemory({
                   runtime,
                   runId,
                   source: `report-${step + 1}`,
-                  sourceIndex: (step + 1) * 10 + 1,
+                  sourceIndex: (step + 1) * 10 + 2,
                   extraction: buildReportStatusMemory({
                     status: reportStatus,
                     summary: stringValue(reportArgs.summary),
@@ -268,7 +286,7 @@ export class CodingRunnerImpl implements CodingRunner {
                       runtime,
                       runId,
                       source: `verification-gate-${step + 1}`,
-                      sourceIndex: (step + 1) * 10 + 2,
+                      sourceIndex: (step + 1) * 10 + 3,
                       extraction: buildToolFailureMemory({
                         toolName: 'coding_report_status',
                         summary: finalError,
@@ -296,12 +314,14 @@ export class CodingRunnerImpl implements CodingRunner {
         if (messages.length > 0 && messages.at(-1).role !== 'tool') {
           // If we exit on text-only without a terminal report, it is a failure
           finalStatus = 'failed'
+          exitReason = 'text_only_failure'
           break
         }
       }
     }
     catch (err: unknown) {
       finalStatus = 'crash'
+      exitReason = 'crash'
       const error = errorMessageFrom(err) || String(err)
       await events.emit('run_crashed', { totalSteps, error })
       return finish({
@@ -310,6 +330,34 @@ export class CodingRunnerImpl implements CodingRunner {
         totalSteps,
         turns,
         error,
+      })
+    }
+
+    if (exitReason === 'none' && !acceptedReportSeen) {
+      exitReason = 'budget_exhausted'
+      finalStatus = 'failed'
+      finalError = buildBudgetExhaustedError({
+        maxSteps: actualMaxSteps,
+        lastToolName,
+        lastFailureSummary,
+      })
+      await events.emit('budget_exhausted', {
+        maxSteps: actualMaxSteps,
+        totalSteps,
+        acceptedReportSeen: false,
+        lastToolName,
+        lastFailureSummary,
+      })
+      syncCodingRunnerTaskMemory({
+        runtime,
+        runId,
+        source: 'budget-exhausted',
+        sourceIndex: actualMaxSteps * 10 + 9,
+        extraction: buildBudgetExhaustedMemory({
+          maxSteps: actualMaxSteps,
+          lastToolName,
+          lastFailureSummary,
+        }),
       })
     }
 
@@ -330,8 +378,37 @@ export function createCodingRunner(config: CodingRunnerConfig, deps: CodingRunne
   return new CodingRunnerImpl(config, deps)
 }
 
+type CodingRunnerExitReason
+  = | 'none'
+    | 'step_timeout'
+    | 'accepted_report'
+    | 'text_only_failure'
+    | 'budget_exhausted'
+    | 'crash'
+
+const MAX_FAILURE_SUMMARY_CHARS = 500
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+function clampFailureSummary(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  if (!trimmed)
+    return undefined
+  return trimmed.slice(0, MAX_FAILURE_SUMMARY_CHARS)
+}
+
+function buildBudgetExhaustedError(params: {
+  maxSteps: number
+  lastToolName?: string
+  lastFailureSummary?: string
+}): string {
+  return [
+    `BUDGET_EXHAUSTED: coding runner reached maxSteps=${params.maxSteps} without an accepted terminal report.`,
+    params.lastToolName ? `lastTool=${params.lastToolName}` : undefined,
+    params.lastFailureSummary ? `lastFailure=${params.lastFailureSummary}` : undefined,
+  ].filter(Boolean).join(' ')
 }
 
 function stringValue(value: unknown): string | undefined {

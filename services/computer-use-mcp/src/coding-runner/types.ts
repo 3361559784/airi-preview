@@ -98,6 +98,13 @@ export type CodingRunnerEventEnvelope
     stepIndex: number
     timeoutMs: number
   }>
+  | RunnerEvent<'budget_exhausted', {
+    maxSteps: number
+    totalSteps: number
+    acceptedReportSeen: false
+    lastToolName?: string
+    lastFailureSummary?: string
+  }>
   | RunnerEvent<'report_status', {
     status: 'completed' | 'failed' | 'blocked'
     summary?: string

@@ -273,6 +273,48 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
     expect(structured.lastError).toContain('workspace error mocked')
   })
 
+  it('returns MCP error when workflow_coding_runner exhausts its step budget', async () => {
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => ({
+      messages: [
+        ...opts.messages,
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_read',
+            function: { name: 'coding_read_file', arguments: '{}' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_read',
+          content: JSON.stringify({ tool: 'coding_read_file', ok: true, status: 'ok' }),
+        },
+      ],
+    }) as any)
+
+    const executeAction = vi.fn<ExecuteAction>(async (action: ActionInvocation) => makeExecutedResult(action))
+    const { server, invoke } = createMockServer()
+
+    registerComputerUseTools({
+      server,
+      runtime,
+      executeAction,
+      enableTestTools: false,
+    })
+
+    const result = await invoke('workflow_coding_runner', {
+      workspacePath: '/tmp/project',
+      taskGoal: 'Loop without report',
+      maxSteps: 1,
+    })
+
+    expect(result.isError).toBe(true)
+    const structured = result.structuredContent as Record<string, any>
+    expect(structured.status).toBe('failed')
+    expect(structured.lastError).toMatch(/^BUDGET_EXHAUSTED:/)
+  })
+
   it('returns MCP error when workflow_coding_runner reports completed but verification gate blocks it', async () => {
     runtime = {
       ...runtime,
