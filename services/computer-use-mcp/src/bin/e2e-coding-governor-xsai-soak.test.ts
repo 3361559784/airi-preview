@@ -3,7 +3,7 @@ import type { StepRecord } from './e2e-coding-governor-xsai-soak'
 
 import { describe, expect, it } from 'vitest'
 
-import { classifyResult, SCENARIOS } from './e2e-coding-governor-xsai-soak'
+import { classifyResult, hasSoakFailures, SCENARIOS } from './e2e-coding-governor-xsai-soak'
 
 // ---------------------------------------------------------------------------
 // compactBackend — copied from soak harness (not exported)
@@ -90,6 +90,29 @@ function detectGuardrailSignal(text: string): string | undefined {
 // ---------------------------------------------------------------------------
 
 describe('soakHarness', () => {
+  describe('hasSoakFailures', () => {
+    it('returns false when every scenario completed and passed', () => {
+      expect(hasSoakFailures([
+        { status: 'completed', scenarioPassed: true },
+        { status: 'completed', scenarioPassed: true },
+      ])).toBe(false)
+    })
+
+    it('returns true when a completed scenario did not pass its contract', () => {
+      expect(hasSoakFailures([
+        { status: 'completed', scenarioPassed: true },
+        { status: 'completed', scenarioPassed: false },
+      ])).toBe(true)
+    })
+
+    it('returns true when a scenario status is not completed', () => {
+      expect(hasSoakFailures([
+        { status: 'completed', scenarioPassed: true },
+        { status: 'crashed', scenarioPassed: false },
+      ])).toBe(true)
+    })
+  })
+
   describe('scenario definitions', () => {
     it('scenario=all selects all 4 scenarios', () => {
       expect(SCENARIOS).toHaveLength(4)

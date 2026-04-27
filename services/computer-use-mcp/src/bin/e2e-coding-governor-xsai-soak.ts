@@ -315,7 +315,12 @@ export interface StepRecord {
 // Trace writer
 // ---------------------------------------------------------------------------
 
-type SummaryStatus = 'completed' | 'failed' | 'blocked' | 'timeout' | 'crashed' | 'interrupted'
+export type SummaryStatus = 'completed' | 'failed' | 'blocked' | 'timeout' | 'crashed' | 'interrupted'
+
+export interface SoakResultItem {
+  status: SummaryStatus
+  scenarioPassed: boolean
+}
 
 class TraceWriter {
   constructor(private outputPath: string) {
@@ -638,6 +643,10 @@ export function classifyResult(scenarioKey: string, steps: StepRecord[]): Classi
   return { firstFailure, selfRescue, guardrailTriggered, shellEscape, scenarioPassed }
 }
 
+export function hasSoakFailures(results: readonly SoakResultItem[]): boolean {
+  return results.some(result => result.status !== 'completed' || !result.scenarioPassed)
+}
+
 // ---------------------------------------------------------------------------
 // Main soak runner
 // ---------------------------------------------------------------------------
@@ -672,7 +681,7 @@ export async function runSoak() {
   const trace = new TraceWriter(config.outputPath)
   trace.writeHeader(config)
 
-  const resultsMatrix: Array<Record<string, any>> = []
+  const resultsMatrix: Array<SoakResultItem & Record<string, any>> = []
 
   // Track current state for SIGINT dumps
   let currentState = {
@@ -1026,8 +1035,15 @@ export async function runSoak() {
   console.log('\n=== RESULTS MATRIX ===')
   console.table(resultsMatrix, ['scenario', 'run', 'status', 'totalSteps', 'firstFailure', 'guardrailTriggered', 'scenarioPassed', 'selfRescue'])
   console.log(`\nTrace written to: ${config.outputPath}`)
+  if (hasSoakFailures(resultsMatrix)) {
+    console.error('\n[FAIL] One or more soak scenarios failed. See RESULTS MATRIX and trace output.')
+    process.exitCode = 1
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  runSoak().catch(console.error)
+  runSoak().catch((err) => {
+    console.error(err)
+    process.exitCode = 1
+  })
 }

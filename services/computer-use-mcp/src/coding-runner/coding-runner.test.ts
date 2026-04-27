@@ -2456,7 +2456,7 @@ describe('codingRunner', () => {
     expect(callCount).toBe(2)
   })
 
-  it('recovers from final-step text-only output with one report-only correction turn', async () => {
+  it('recovers from final-step text-only output with a report-only correction turn', async () => {
     const { mockRuntime, mockExecuteAction } = createMockDeps()
     let callCount = 0
 
@@ -2513,13 +2513,129 @@ describe('codingRunner', () => {
     }))
   })
 
-  it('fails when the final report-only correction also returns text-only output', async () => {
+  it('recovers when the first report-only correction also returns text-only output', async () => {
     const { mockRuntime, mockExecuteAction } = createMockDeps()
     let callCount = 0
 
     vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
       callCount += 1
+      if (callCount <= 2) {
+        if (callCount === 2) {
+          const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
+          expect(toolNames).toEqual(['coding_report_status'])
+          expect(opts.system).toContain('Do not answer with text only. Call coding_report_status')
+        }
+        return {
+          messages: [
+            ...opts.messages,
+            { role: 'assistant', content: callCount === 1 ? 'Everything is done. Tests pass.' : 'Summary: done.' },
+          ],
+        } as any
+      }
+
+      const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
+      expect(toolNames).toEqual(['coding_report_status'])
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report_retry',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report_retry',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed', summary: 'reported after second correction' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Recover final text-only twice', maxSteps: 1 })
+
+    expect(result.status).toBe('completed')
+    expect(result.totalSteps).toBe(3)
+    expect(callCount).toBe(3)
+    expect(result.turns.map(turn => turn.role)).toEqual(['assistant', 'assistant', 'tool'])
+    expect(result.turns.at(-1)?.toolName).toBe('coding_report_status')
+  })
+
+  it('recovers when a report-only correction requests an unavailable tool once', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            { role: 'assistant', content: 'Everything is done. Tests pass.' },
+          ],
+        } as any
+      }
       if (callCount === 2) {
+        const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
+        expect(toolNames).toEqual(['coding_report_status'])
+        throw new Error('Model tried to call unavailable tool "apply_patch", Available tools: coding_report_status.')
+      }
+
+      const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
+      expect(toolNames).toEqual(['coding_report_status'])
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report_after_unavailable_tool',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report_after_unavailable_tool',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed', summary: 'reported after unavailable tool correction' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Recover unavailable correction tool', maxSteps: 1 })
+
+    expect(result.status).toBe('completed')
+    expect(result.totalSteps).toBe(3)
+    expect(callCount).toBe(3)
+    expect(result.turns.map(turn => turn.role)).toEqual(['assistant', 'tool'])
+    expect(result.turns.at(-1)?.toolName).toBe('coding_report_status')
+  })
+
+  it('fails when all final report-only corrections return text-only output', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      if (callCount > 1) {
         const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
         expect(toolNames).toEqual(['coding_report_status'])
       }
@@ -2535,9 +2651,9 @@ describe('codingRunner', () => {
     const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Do something', maxSteps: 1 })
 
     expect(result.status).toBe('failed')
-    expect(result.totalSteps).toBe(2)
-    expect(callCount).toBe(2)
-    expect(result.turns.map(turn => turn.role)).toEqual(['assistant', 'assistant'])
+    expect(result.totalSteps).toBe(3)
+    expect(callCount).toBe(3)
+    expect(result.turns.map(turn => turn.role)).toEqual(['assistant', 'assistant', 'assistant'])
     expect(result.error).toContain('TEXT_ONLY_FINAL')
     expect(result.error).not.toContain('BUDGET_EXHAUSTED')
   })
