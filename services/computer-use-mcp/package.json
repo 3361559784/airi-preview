@@ -43,6 +43,7 @@
     "smoke:remote": "tsx ./src/bin/smoke-remote.ts",
     "smoke:stdio": "tsx ./src/bin/smoke-stdio.ts",
     "smoke:macos": "tsx ./src/bin/smoke-macos.ts",
+    "smoke:workspace-memory-review": "tsx ./src/bin/smoke-workspace-memory-review.ts",
     "smoke:workflow": "tsx ./src/bin/smoke-workflow.ts",
     "mcp:inspector": "pnpx @modelcontextprotocol/inspector pnpm -F @proj-airi/computer-use-mcp start",
     "build": "tsdown",
