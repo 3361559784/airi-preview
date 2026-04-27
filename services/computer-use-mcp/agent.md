@@ -132,6 +132,36 @@ Do not rely on compressed chat summaries to resume this work. Use this file as
 the current handoff index and update it when terminal-lane behavior changes
 materially.
 
+## Coding Line Current Baseline
+
+Last reviewed: 2026-04-27
+Workstream: coding-line-product-stability
+
+Current branch baseline:
+
+```text
+codex/coding-line-complete-local
+HEAD: faf4fd4b9 fix(coding-runner): recover analysis report archive denial
+Remote target: 3361559784/airi-preview
+```
+
+The current DeepSeek live verification matrix is green:
+
+- analysis/report: `completed`
+- shell misuse recovery: `passed`, with `dangerous_file_mutation` guard denial
+  exercised and recovered through `coding_apply_patch` plus validation
+- auto proof recovery: `passed`, with `missing_mutation_proof` completion
+  denial exercised and recovered through patch/read/review/validation
+- governor soak `all`, `runs=1`: all four scenarios passed
+
+Details and exact commands live in:
+
+- `coding-provider-eval-observations.md`
+
+Do not change runner runtime from this green matrix alone. If the next goal is
+more confidence, increase live soak breadth first. If a repeated failure appears,
+map it to the documented failure class before opening a narrow runtime follow-up.
+
 ## Terminal Lane v2: What Is Already Landed
 
 ### 1. Terminal surface model exists
