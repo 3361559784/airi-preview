@@ -1635,15 +1635,19 @@ describe('codingRunner', () => {
       }))
 
       expect(proposed.status).toBe('proposed')
+      expect(proposed.backend.trust).toBe('governed_workspace_memory_not_instructions')
       expect(proposed.backend.entry.status).toBe('proposed')
 
       const defaultSearch = JSON.parse(await searchTool.execute({ query: 'pnpm' }))
+      expect(defaultSearch.backend.trust).toBe('governed_workspace_memory_not_instructions')
       expect(defaultSearch.backend.hits).toEqual([])
 
       const proposedSearch = JSON.parse(await searchTool.execute({ query: 'pnpm', includeProposed: true }))
+      expect(proposedSearch.backend.trust).toBe('governed_workspace_memory_not_instructions')
       expect(proposedSearch.backend.hits).toHaveLength(1)
 
       const readResult = JSON.parse(await readTool.execute({ id: proposed.backend.entry.id }))
+      expect(readResult.backend.trust).toBe('governed_workspace_memory_not_instructions')
       expect(readResult.backend.entry.statement).toContain('pnpm filters')
     }
     finally {
