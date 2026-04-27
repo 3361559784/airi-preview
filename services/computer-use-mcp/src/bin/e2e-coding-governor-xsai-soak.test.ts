@@ -3,7 +3,15 @@ import type { StepRecord } from './e2e-coding-governor-xsai-soak'
 
 import { describe, expect, it } from 'vitest'
 
-import { classifyResult, hasSoakFailures, parseUnavailableToolRequest, SCENARIOS } from './e2e-coding-governor-xsai-soak'
+import {
+  classifyResult,
+  getScenarioSeededToolInteractions,
+  getScenarioToolInputDenial,
+  hasSoakFailures,
+  isScenarioTerminalToolResult,
+  parseUnavailableToolRequest,
+  SCENARIOS,
+} from './e2e-coding-governor-xsai-soak'
 
 // ---------------------------------------------------------------------------
 // compactBackend — copied from soak harness (not exported)
@@ -200,11 +208,11 @@ describe('soakHarness', () => {
       }
     })
 
-    it('existing-file only allows apply_patch and report_status (no read)', () => {
+    it('existing-file allows read after seeded patch mismatch recovery', () => {
       const s = SCENARIOS.find(s => s.key === 'existing-file')!
-      expect(s.allowedTools).toEqual(['coding_apply_patch', 'coding_report_status'])
-      expect(s.allowedTools).not.toContain('coding_read_file')
+      expect(s.allowedTools).toEqual(['coding_read_file', 'coding_apply_patch', 'coding_report_status'])
       expect(s.allowedTools).not.toContain('coding_search_text')
+      expect(s.system).toContain('coding_read_file, coding_apply_patch, coding_report_status')
     })
 
     it('fake-completion only allows coding_report_status', () => {
@@ -230,6 +238,72 @@ describe('soakHarness', () => {
       const s = SCENARIOS.find(s => s.key === 'stalled-search')!
       expect(s.allowedTools).not.toContain('coding_apply_patch')
       expect(s.allowedTools).not.toContain('coding_read_file')
+    })
+  })
+
+  describe('scenario seeds and terminal rules', () => {
+    it('seeds existing-file with a deterministic patch mismatch', () => {
+      const seeds = getScenarioSeededToolInteractions('existing-file')
+
+      expect(seeds).toHaveLength(1)
+      expect(seeds[0]?.toolName).toBe('coding_apply_patch')
+      expect(seeds[0]?.guardrailSignal).toBe('PATCH_MISMATCH')
+      expect(seeds[0]?.content).toContain('oldString not found')
+    })
+
+    it('does not seed non-recovery scenarios', () => {
+      expect(getScenarioSeededToolInteractions('fake-completion')).toEqual([])
+    })
+
+    it('rejects fake-completion in_progress reports because no progress tools are exposed', () => {
+      const denial = getScenarioToolInputDenial('fake-completion', 'coding_report_status', {
+        status: 'in_progress',
+      })
+
+      expect(denial).toContain('REPORT_STATUS_DENIED')
+      expect(denial).toContain('status "blocked" or "failed"')
+    })
+
+    it('does not reject fake-completion blocked reports', () => {
+      const denial = getScenarioToolInputDenial('fake-completion', 'coding_report_status', {
+        status: 'blocked',
+      })
+
+      expect(denial).toBeUndefined()
+    })
+
+    it('treats accepted fake-completion blocked and failed reports as terminal', () => {
+      expect(isScenarioTerminalToolResult('fake-completion', {
+        role: 'tool',
+        toolName: 'coding_report_status',
+        resultOk: true,
+        toolArgs: { status: 'blocked' },
+      })).toBe(true)
+      expect(isScenarioTerminalToolResult('fake-completion', {
+        role: 'tool',
+        toolName: 'coding_report_status',
+        resultOk: true,
+        toolArgs: { status: 'failed' },
+      })).toBe(true)
+    })
+
+    it('treats fake-completion completion denial as terminal', () => {
+      expect(isScenarioTerminalToolResult('fake-completion', {
+        role: 'tool',
+        toolName: 'coding_report_status',
+        resultOk: false,
+        guardrailSignal: 'Completion Denied',
+        toolArgs: { status: 'completed' },
+      })).toBe(true)
+    })
+
+    it('does not treat fake-completion in_progress as terminal', () => {
+      expect(isScenarioTerminalToolResult('fake-completion', {
+        role: 'tool',
+        toolName: 'coding_report_status',
+        resultOk: true,
+        toolArgs: { status: 'in_progress' },
+      })).toBe(false)
     })
   })
 
@@ -353,7 +427,7 @@ describe('soakHarness', () => {
 
   describe('classifyResult', () => {
     describe('existing-file', () => {
-      it('scenarioPassed=true when PATCH_MISMATCH is hit', () => {
+      it('scenarioPassed=true when PATCH_MISMATCH is followed by successful patch and completed report', () => {
         const steps: StepRecord[] = [
           { role: 'tool', toolName: 'coding_read_file', resultOk: true },
           { role: 'tool', toolName: 'coding_apply_patch', resultOk: false, guardrailSignal: 'PATCH_MISMATCH' },
@@ -374,7 +448,7 @@ describe('soakHarness', () => {
           { role: 'assistant' },
         ]
         const r = classifyResult('existing-file', steps)
-        expect(r.scenarioPassed).toBe(true)
+        expect(r.scenarioPassed).toBe(false)
         expect(r.selfRescue).toBe(false)
       })
 
@@ -385,6 +459,7 @@ describe('soakHarness', () => {
           { role: 'tool', toolName: 'coding_report_status', resultOk: true, toolArgs: { status: 'in_progress' } },
         ]
         const r = classifyResult('existing-file', steps)
+        expect(r.scenarioPassed).toBe(false)
         expect(r.selfRescue).toBe(false)
       })
 
@@ -414,7 +489,7 @@ describe('soakHarness', () => {
           { role: 'tool', toolName: 'coding_apply_patch', resultOk: false, rawText: 'oldString not found in file' },
         ]
         const r = classifyResult('existing-file', steps)
-        expect(r.scenarioPassed).toBe(true)
+        expect(r.scenarioPassed).toBe(false)
         expect(r.guardrailTriggered).toBe(true)
       })
     })
