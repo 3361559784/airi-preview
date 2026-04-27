@@ -2456,10 +2456,73 @@ describe('codingRunner', () => {
     expect(callCount).toBe(2)
   })
 
-  it('should fail when loop ends on text-only assistant output without terminal report', async () => {
+  it('recovers from final-step text-only output with one report-only correction turn', async () => {
     const { mockRuntime, mockExecuteAction } = createMockDeps()
+    let callCount = 0
 
     vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            { role: 'assistant', content: 'Everything is done. Tests pass.' },
+          ],
+        } as any
+      }
+
+      const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
+      expect(toolNames).toEqual(['coding_report_status'])
+      expect(opts.system).toContain('Do not answer with text only. Call coding_report_status')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed', summary: 'reported after final text-only correction' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Recover final text-only', maxSteps: 1 })
+
+    expect(result.status).toBe('completed')
+    expect(result.totalSteps).toBe(2)
+    expect(callCount).toBe(2)
+    expect(result.turns.map(turn => turn.role)).toEqual(['assistant', 'tool'])
+    expect(result.turns.at(-1)?.toolName).toBe('coding_report_status')
+    expect(mockRuntime.stateManager.updateTaskMemory).toHaveBeenCalledWith(expect.objectContaining({
+      recentFailureReason: expect.stringContaining('text-only response'),
+    }))
+  })
+
+  it('fails when the final report-only correction also returns text-only output', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      if (callCount === 2) {
+        const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
+        expect(toolNames).toEqual(['coding_report_status'])
+      }
       return {
         messages: [
           ...opts.messages,
@@ -2472,9 +2535,118 @@ describe('codingRunner', () => {
     const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Do something', maxSteps: 1 })
 
     expect(result.status).toBe('failed')
-    expect(result.turns.length).toBe(1)
-    expect(result.turns[0].role).toBe('assistant')
+    expect(result.totalSteps).toBe(2)
+    expect(callCount).toBe(2)
+    expect(result.turns.map(turn => turn.role)).toEqual(['assistant', 'assistant'])
     expect(result.error).toContain('TEXT_ONLY_FINAL')
+    expect(result.error).not.toContain('BUDGET_EXHAUSTED')
+  })
+
+  it('keeps verification gate blocking during final text-only correction', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager.getState.mockReturnValue(createGateReadyState({
+      coding: {
+        taskKind: 'edit',
+        lastChangeReview: undefined,
+      },
+    }))
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            { role: 'assistant', content: 'Everything is done. Tests pass.' },
+          ],
+        } as any
+      }
+
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed', summary: 'reported after final text-only correction' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Recover final text-only', maxSteps: 1 })
+
+    expect(result.status).toBe('failed')
+    expect(result.totalSteps).toBe(2)
+    expect(result.error).toContain('Verification Gate blocked completion')
+    expect(result.error).toContain('reason=review_missing')
+  })
+
+  it('fails correction when report-only coding_report_status is rejected', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            { role: 'assistant', content: 'Everything is done. Tests pass.' },
+          ],
+        } as any
+      }
+
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report_denied',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report_denied',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed' },
+              ok: false,
+              status: 'exception',
+              error: 'Completion Denied: missing mutation proof',
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({ workspacePath: '/test', taskGoal: 'Recover final text-only', maxSteps: 1 })
+
+    expect(result.status).toBe('failed')
+    expect(result.totalSteps).toBe(2)
+    expect(callCount).toBe(2)
+    expect(result.error).toContain('TEXT_ONLY_FINAL')
+    expect(result.error).toContain('Completion Denied: missing mutation proof')
     expect(result.error).not.toContain('BUDGET_EXHAUSTED')
   })
 

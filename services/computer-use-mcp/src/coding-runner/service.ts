@@ -64,6 +64,7 @@ export class CodingRunnerImpl implements CodingRunner {
       runId,
       workspaceMemoryStore,
     })
+    const reportOnlyXsaiTools = xsaiTools.filter((tool: any) => getXsaiToolName(tool) === 'coding_report_status')
 
     // Preflight 1: Review Workspace
     await events.emit('preflight_started', { name: 'coding_review_workspace' })
@@ -133,30 +134,36 @@ export class CodingRunnerImpl implements CodingRunner {
     let acceptedReportSeen = false
     let lastToolName: string | undefined
     let lastFailureSummary: string | undefined
+    let finalReportCorrectionPending = false
+    let finalReportCorrectionUsed = false
     const turns: CodingRunnerTurnResult[] = []
 
     try {
-      for (let step = 0; step < actualMaxSteps; step++) {
+      for (let step = 0; step < actualMaxSteps || finalReportCorrectionPending; step++) {
+        const isReportCorrectionStep = finalReportCorrectionPending
+        finalReportCorrectionPending = false
         totalSteps = step + 1
         let messages: any[]
         const controller = new AbortController()
         const timeoutId = setTimeout(() => controller.abort(new Error('STEP_TIMEOUT')), actualStepTimeoutMs)
         await events.emit('step_started', { stepIndex: step + 1, maxSteps: actualMaxSteps })
-        syncCodingRunnerTaskMemory({
-          runtime,
-          runId,
-          source: `step-${step + 1}`,
-          sourceIndex: (step + 1) * 10,
-          extraction: buildStepMemory(step + 1, actualMaxSteps),
-        })
-        if (actualMaxSteps - step <= 2) {
+        if (!isReportCorrectionStep) {
           syncCodingRunnerTaskMemory({
             runtime,
             runId,
-            source: `budget-pressure-${step + 1}`,
-            sourceIndex: (step + 1) * 10 + 1,
-            extraction: buildBudgetPressureMemory(step, actualMaxSteps),
+            source: `step-${step + 1}`,
+            sourceIndex: (step + 1) * 10,
+            extraction: buildStepMemory(step + 1, actualMaxSteps),
           })
+          if (actualMaxSteps - step <= 2) {
+            syncCodingRunnerTaskMemory({
+              runtime,
+              runId,
+              source: `budget-pressure-${step + 1}`,
+              sourceIndex: (step + 1) * 10 + 1,
+              extraction: buildBudgetPressureMemory(step, actualMaxSteps),
+            })
+          }
         }
 
         const workspaceMemoryContext = workspaceMemoryStore.toContextString(taskGoal)
@@ -173,7 +180,7 @@ export class CodingRunnerImpl implements CodingRunner {
             model: this.config.model,
             baseURL: this.config.baseURL,
             apiKey: this.config.apiKey,
-            tools: xsaiTools as any,
+            tools: (isReportCorrectionStep ? reportOnlyXsaiTools : xsaiTools) as any,
             system: projection.system,
             messages: projection.messages as any,
             abortSignal: controller.signal as any,
@@ -236,6 +243,13 @@ export class CodingRunnerImpl implements CodingRunner {
             })
             lastToolName = toolName
 
+            if (isReportCorrectionStep && toolName !== 'coding_report_status') {
+              finalStatus = 'failed'
+              finalError = `TEXT_ONLY_FINAL: report-only correction must call coding_report_status, got ${toolName}.`
+              exitReason = 'text_only_failure'
+              break
+            }
+
             if (!resultOk) {
               lastFailureSummary = clampFailureSummary(failureSummary ?? lastContent)
               syncCodingRunnerTaskMemory({
@@ -248,6 +262,12 @@ export class CodingRunnerImpl implements CodingRunner {
                   summary: lastFailureSummary,
                 }),
               })
+              if (isReportCorrectionStep && toolName === 'coding_report_status') {
+                finalStatus = 'failed'
+                finalError = `TEXT_ONLY_FINAL: report-only correction failed.${lastFailureSummary ? ` lastToolError=${lastFailureSummary}` : ''}`
+                exitReason = 'text_only_failure'
+                break
+              }
             }
             else if (toolName !== 'coding_report_status') {
               const evidenceMemory = buildSuccessfulToolEvidenceMemory({
@@ -325,6 +345,12 @@ export class CodingRunnerImpl implements CodingRunner {
                 }
                 break
               }
+              if (isReportCorrectionStep) {
+                finalStatus = 'failed'
+                finalError = 'TEXT_ONLY_FINAL: report-only correction did not produce an accepted terminal report.'
+                exitReason = 'text_only_failure'
+                break
+              }
             }
           }
           else if (lastMsg.role === 'assistant') {
@@ -339,8 +365,29 @@ export class CodingRunnerImpl implements CodingRunner {
         // Stop condition: assistant gives text without tool_calls
         if (messages.length > 0 && messages.at(-1).role !== 'tool') {
           const summary = clampFailureSummary(lastFailureSummary ?? String(turns.at(-1)?.rawText ?? 'text-only assistant response'))
+          if (isReportCorrectionStep) {
+            finalStatus = 'failed'
+            finalError = `TEXT_ONLY_FINAL: report-only correction ended without an accepted terminal report.${summary ? ` lastAssistant=${summary}` : ''}`
+            exitReason = 'text_only_failure'
+            break
+          }
           if (step + 1 >= actualMaxSteps) {
-            // If the final available step exits on text-only without a terminal report, it is a failure.
+            if (!finalReportCorrectionUsed && reportOnlyXsaiTools.length > 0) {
+              lastFailureSummary = summary
+              finalReportCorrectionUsed = true
+              finalReportCorrectionPending = true
+              syncCodingRunnerTaskMemory({
+                runtime,
+                runId,
+                source: `text-only-report-required-${step + 1}`,
+                sourceIndex: (step + 1) * 10 + 2,
+                extraction: buildTextOnlyReportRequiredMemory(summary ?? 'missing terminal report'),
+              })
+              continue
+            }
+
+            // If the final report-only correction is unavailable or already used,
+            // text-only output without a terminal report remains a failure.
             finalStatus = 'failed'
             finalError = `TEXT_ONLY_FINAL: coding runner ended without an accepted terminal report.${summary ? ` lastAssistant=${summary}` : ''}`
             exitReason = 'text_only_failure'
@@ -431,6 +478,19 @@ const MAX_FAILURE_SUMMARY_CHARS = 500
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+function getXsaiToolName(tool: unknown) {
+  if (!isRecord(tool))
+    return undefined
+
+  if (typeof tool.name === 'string')
+    return tool.name
+
+  const fn = tool.function
+  return isRecord(fn) && typeof fn.name === 'string'
+    ? fn.name
+    : undefined
 }
 
 function clampFailureSummary(value: string | undefined): string | undefined {
