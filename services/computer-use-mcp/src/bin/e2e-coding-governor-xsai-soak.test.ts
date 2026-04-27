@@ -3,7 +3,7 @@ import type { StepRecord } from './e2e-coding-governor-xsai-soak'
 
 import { describe, expect, it } from 'vitest'
 
-import { classifyResult, hasSoakFailures, SCENARIOS } from './e2e-coding-governor-xsai-soak'
+import { classifyResult, hasSoakFailures, parseUnavailableToolRequest, SCENARIOS } from './e2e-coding-governor-xsai-soak'
 
 // ---------------------------------------------------------------------------
 // compactBackend — copied from soak harness (not exported)
@@ -110,6 +110,33 @@ describe('soakHarness', () => {
         { status: 'completed', scenarioPassed: true },
         { status: 'crashed', scenarioPassed: false },
       ])).toBe(true)
+    })
+  })
+
+  describe('parseUnavailableToolRequest', () => {
+    it('extracts requested and available tools from unavailable-tool errors', () => {
+      const result = parseUnavailableToolRequest(
+        new Error('Model tried to call unavailable tool "bash", Available tools: coding_report_status.'),
+      )
+
+      expect(result).toEqual({
+        requestedTool: 'bash',
+        availableTools: ['coding_report_status'],
+        message: 'Model tried to call unavailable tool "bash", Available tools: coding_report_status.',
+      })
+    })
+
+    it('returns undefined for non tool-adherence errors', () => {
+      expect(parseUnavailableToolRequest(new Error('fetch failed'))).toBeUndefined()
+    })
+
+    it('extracts unavailable-tool requests from prefixed string errors', () => {
+      const result = parseUnavailableToolRequest(
+        'Error: Model tried to call unavailable tool "apply_patch", Available tools: coding_report_status.',
+      )
+
+      expect(result?.requestedTool).toBe('apply_patch')
+      expect(result?.availableTools).toEqual(['coding_report_status'])
     })
   })
 

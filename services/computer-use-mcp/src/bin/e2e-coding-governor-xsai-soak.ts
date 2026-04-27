@@ -320,6 +320,14 @@ export type SummaryStatus = 'completed' | 'failed' | 'blocked' | 'timeout' | 'cr
 export interface SoakResultItem {
   status: SummaryStatus
   scenarioPassed: boolean
+  toolAdherenceViolation?: boolean
+  requestedUnavailableTool?: string
+}
+
+export interface ToolAdherenceViolation {
+  requestedTool: string
+  availableTools: string[]
+  message: string
 }
 
 class TraceWriter {
@@ -362,6 +370,9 @@ class TraceWriter {
     shellEscape: boolean
     selfRescue: boolean
     scenarioPassed: boolean
+    toolAdherenceViolation?: boolean
+    requestedUnavailableTool?: string
+    availableTools?: string[]
   }) {
     const line = JSON.stringify({
       type: 'summary',
@@ -645,6 +656,33 @@ export function classifyResult(scenarioKey: string, steps: StepRecord[]): Classi
 
 export function hasSoakFailures(results: readonly SoakResultItem[]): boolean {
   return results.some(result => result.status !== 'completed' || !result.scenarioPassed)
+}
+
+/**
+ * Extracts unavailable-tool requests from xsAI tool-call errors.
+ *
+ * Before:
+ * - `Model tried to call unavailable tool "bash", Available tools: coding_report_status.`
+ *
+ * After:
+ * - `{ requestedTool: "bash", availableTools: ["coding_report_status"] }`
+ */
+export function parseUnavailableToolRequest(value: unknown): ToolAdherenceViolation | undefined {
+  const message = value instanceof Error ? value.message : String(value)
+  const match = /(?:^|.*)Model tried to call unavailable tool "([^"]+)", Available tools: (.+?)\.?$/u.exec(message.trim())
+  if (!match)
+    return undefined
+
+  const availableTools = match[2]!
+    .split(',')
+    .map(toolName => toolName.trim().replace(/\.$/u, ''))
+    .filter(toolName => toolName.length > 0)
+
+  return {
+    requestedTool: match[1]!,
+    availableTools,
+    message,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,20 +1048,35 @@ export async function runSoak() {
         console.log(`  => ${finalStatus} | steps=${totalSteps} | failure=${classification.firstFailure} | guardrail=${classification.guardrailTriggered} | passed=${classification.scenarioPassed} | rescue=${classification.selfRescue}\n`)
       }
       catch (err: any) {
-        console.error(`  [!] CRASH:`, err instanceof Error ? err.message : String(err))
+        const toolAdherence = parseUnavailableToolRequest(err)
+        const errorMessage = err instanceof Error ? err.message : String(err)
+        if (toolAdherence) {
+          console.error(
+            `  [!] TOOL_ADHERENCE_VIOLATION: requested unavailable tool "${toolAdherence.requestedTool}" `
+            + `(available: ${toolAdherence.availableTools.join(', ') || 'none'})`,
+          )
+        }
+        else {
+          console.error(`  [!] CRASH:`, errorMessage)
+        }
         terminalMode = 'crash'
         const classification = classifyResult(scenario.key, stepRecords)
         const resultItem = {
           scenario: scenario.name,
           run,
           totalSteps,
-          status: 'crashed' as const,
+          status: toolAdherence ? 'failed' as const : 'crashed' as const,
           terminalMode,
-          firstFailure: String(err instanceof Error ? err.message : err).slice(0, 200),
+          firstFailure: toolAdherence
+            ? `TOOL_ADHERENCE_VIOLATION: requested unavailable tool "${toolAdherence.requestedTool}"; available tools: ${toolAdherence.availableTools.join(', ') || 'none'}`
+            : errorMessage.slice(0, 200),
           guardrailTriggered: classification.guardrailTriggered,
           shellEscape: false,
           selfRescue: false,
           scenarioPassed: false,
+          toolAdherenceViolation: Boolean(toolAdherence),
+          requestedUnavailableTool: toolAdherence?.requestedTool,
+          availableTools: toolAdherence?.availableTools,
         }
         resultsMatrix.push(resultItem)
         trace.writeSummary(resultItem)
@@ -1033,7 +1086,7 @@ export async function runSoak() {
 
   // Final console summary
   console.log('\n=== RESULTS MATRIX ===')
-  console.table(resultsMatrix, ['scenario', 'run', 'status', 'totalSteps', 'firstFailure', 'guardrailTriggered', 'scenarioPassed', 'selfRescue'])
+  console.table(resultsMatrix, ['scenario', 'run', 'status', 'totalSteps', 'firstFailure', 'guardrailTriggered', 'scenarioPassed', 'toolAdherenceViolation', 'requestedUnavailableTool', 'selfRescue'])
   console.log(`\nTrace written to: ${config.outputPath}`)
   if (hasSoakFailures(resultsMatrix)) {
     console.error('\n[FAIL] One or more soak scenarios failed. See RESULTS MATRIX and trace output.')
