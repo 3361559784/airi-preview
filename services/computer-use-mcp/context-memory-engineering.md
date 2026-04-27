@@ -345,6 +345,11 @@ Only after the first three phases are stable:
 - define verification threshold
 - define conflict resolution and stale-memory cleanup
 
+Current governance rules are documented in
+`coding-context-memory-substrate-audit.md#workspace-memory-promotion-governance`.
+Treat that section as the current policy source before implementing any
+promotion tool or UI.
+
 ## Explicit Non-Goals
 
 These are intentionally out of scope for the first real memory implementation:

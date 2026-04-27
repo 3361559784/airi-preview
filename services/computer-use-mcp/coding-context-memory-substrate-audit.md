@@ -151,6 +151,76 @@ Current implementation does not define a full promotion workflow:
 
 Correct label: governed memory substrate, not completed long-term memory.
 
+## Workspace Memory Promotion Governance
+
+Workspace memory promotion is an out-of-band governance action. The coding
+runner may propose workspace memory, search active memory, read memory entries,
+and optionally inspect proposed entries for review. It must not promote entries
+inside the model loop.
+
+This section defines the governance contract before implementation. Current
+runtime code has status fields and store-level status updates, but it does not
+yet enforce reviewer identity, audit metadata, transition guards, or a
+promotion UI/tool.
+
+Current state transitions:
+
+- `proposed -> active`: allowed only after explicit external review.
+- `proposed -> rejected`: allowed when the entry is speculative, stale,
+  duplicated, contradicted, privacy-sensitive, or not useful enough to persist.
+- `active -> rejected`: allowed when the entry is superseded, stale, harmful,
+  or contradicted by newer repository evidence.
+- `rejected -> active`: requires a fresh review; rejection is not a soft pause.
+
+Promotion to `active` requires all of the following:
+
+- the statement is durable workspace knowledge, not a one-run observation
+- the evidence points to concrete code, tests, package scripts, logs, or human
+  review notes
+- the entry does not conflict with existing active memory, or the conflict is
+  explicitly resolved by rejecting/superseding the older entry
+- the entry is useful across future runs for the same workspace key
+- the reviewer is outside the current model loop
+- `humanVerified` is set to `true`
+
+`humanVerified` means a human or external governance process accepted the entry
+for prompt retrieval after checking its evidence and conflicts. It does not mean
+the entry is timeless truth, and it does not bypass runtime proof gates, tests,
+or current user instructions.
+
+Confidence policy:
+
+- `low`: default for model-proposed entries, one-off observations, or weak
+  evidence; may remain proposed but should not become active without stronger
+  review rationale
+- `medium`: evidence-backed project fact or recurring pitfall with concrete
+  source references; eligible for promotion after review
+- `high`: stable constraint, command, or recurring project rule confirmed by
+  implementation/tests/scripts or repeated human-reviewed evidence
+- confidence is advisory and never auto-promotes an entry
+
+Stale/conflict policy:
+
+- stale proposed entries should be rejected rather than silently ignored
+- stale active entries should be re-reviewed and either kept active, replaced by
+  a newer active entry, or rejected
+- conflicting active entries are a defect in governance; resolve by keeping one
+  active entry and rejecting or replacing the other
+- proposed entries that overlap active memory should be treated as update
+  candidates, not as parallel truths
+
+Archive and task-memory boundaries:
+
+- archived context is historical evidence and must not auto-promote to
+  workspace memory
+- task memory and evidence pins are current-run state and must not auto-promote
+  to workspace memory
+- repeated archive/task-memory evidence can justify a proposal, but activation
+  still requires external review
+
+Correct governance label: workspace memory is rare, reviewed, and high-trust
+retrieved context. It is not a dumping ground for model summaries.
+
 ## Known Gaps
 
 - Documentation drift: `archived-context/types.ts` and older docs still describe V1 as write-only/no retrieval, while current-run search/read now exist.
@@ -161,6 +231,8 @@ Correct label: governed memory substrate, not completed long-term memory.
 - Workspace memory is queried from the initial task goal; mid-run task redirection does not yet have a stronger retrieval strategy.
 - Archive search is current-run substring matching only. This is acceptable for V1, but it is not a general memory retrieval system.
 - Long tasks may still lose specific validation/edit/review evidence under projection pressure unless those evidence classes are explicitly pinned.
+- Workspace memory promotion governance is now documented, but no model-loop
+  promotion tool or UI/governance workflow is implemented.
 
 ## Follow-Up Slices
 
@@ -238,14 +310,15 @@ Do not include:
 
 ### Slice 5: Workspace Memory Governance
 
-Goal: define promotion rules before adding automation.
+Goal: implement tooling only after the promotion rules above prove sufficient in
+manual/out-of-band review.
 
 Include:
 
-- proposed -> active criteria
-- `humanVerified` semantics
-- stale/conflict handling
-- confidence policy
+- external review surfaces for proposed entries
+- explicit `proposed -> active/rejected` status updates
+- conflict/stale review workflow
+- audit trail for reviewer decisions
 
 Do not include:
 
@@ -266,4 +339,3 @@ Do not include:
 - Do not call archived context long-term memory.
 - Do not call workspace memory governance complete.
 - Do not treat projected prompt context as a truth source.
-
