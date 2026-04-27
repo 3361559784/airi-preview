@@ -111,6 +111,18 @@ describe('soakHarness', () => {
         { status: 'crashed', scenarioPassed: false },
       ])).toBe(true)
     })
+
+    it('returns true for unavailable-tool adherence violations even after a guardrail was exercised', () => {
+      expect(hasSoakFailures([
+        { status: 'completed', scenarioPassed: true },
+        {
+          status: 'failed',
+          scenarioPassed: false,
+          toolAdherenceViolation: true,
+          requestedUnavailableTool: 'Bash',
+        },
+      ])).toBe(true)
+    })
   })
 
   describe('parseUnavailableToolRequest', () => {
@@ -136,6 +148,15 @@ describe('soakHarness', () => {
       )
 
       expect(result?.requestedTool).toBe('apply_patch')
+      expect(result?.availableTools).toEqual(['coding_report_status'])
+    })
+
+    it('extracts provider-style Bash tool adherence failures from fake-completion correction', () => {
+      const result = parseUnavailableToolRequest(
+        new Error('Model tried to call unavailable tool "Bash", Available tools: coding_report_status.'),
+      )
+
+      expect(result?.requestedTool).toBe('Bash')
       expect(result?.availableTools).toEqual(['coding_report_status'])
     })
   })
