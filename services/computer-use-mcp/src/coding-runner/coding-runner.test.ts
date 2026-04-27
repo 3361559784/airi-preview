@@ -791,6 +791,224 @@ describe('codingRunner', () => {
     expect(events.map(event => event.kind)).not.toContain('budget_exhausted')
   })
 
+  it('recovers from a wrong-cwd terminal detour before final report', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const events: CodingRunnerEventEnvelope[] = []
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount++
+      if (callCount === 1) {
+        mockRuntime.stateManager.getState().lastTerminalResult = {
+          command: 'cat index.ts',
+          effectiveCwd: '/Users/liuziheng/airi',
+          exitCode: 1,
+          stdout: '',
+          stderr: 'cat: index.ts: No such file or directory\n',
+          durationMs: 100,
+          timedOut: false,
+        }
+
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_wrong_cwd',
+                function: { name: 'terminal_exec', arguments: '{"command":"cat index.ts","cwd":"/Users/liuziheng/airi"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_wrong_cwd',
+              content: JSON.stringify({
+                tool: 'terminal_exec',
+                args: { command: 'cat index.ts', cwd: '/Users/liuziheng/airi' },
+                ok: true,
+                status: 'executed',
+                summary: 'Command `cat index.ts` failed with exit code 1.',
+                backend: {
+                  command: 'cat index.ts',
+                  exitCode: 1,
+                  stdout: '',
+                  stderr: 'cat: index.ts: No such file or directory\n',
+                  effectiveCwd: '/Users/liuziheng/airi',
+                  timedOut: false,
+                  terminalState: { effectiveCwd: '/test' },
+                },
+              }),
+            },
+          ],
+        } as any
+      }
+
+      if (callCount === 2) {
+        expect(JSON.stringify(opts.messages)).toContain('cat: index.ts: No such file or directory')
+        expect(opts.system).toContain('terminal_result:cat index.ts')
+        expect(opts.system).toContain('exitCode=1 timedOut=false')
+
+        mockRuntime.stateManager.getState().lastTerminalResult = {
+          command: 'cd /test && node check.js',
+          effectiveCwd: '/test',
+          exitCode: 0,
+          stdout: 'Check Passed\n',
+          stderr: '',
+          durationMs: 100,
+          timedOut: false,
+        }
+        mockRuntime.stateManager.updateCodingState({
+          recentEdits: [{
+            path: 'src/a.ts',
+            summary: 'Recovered after wrong-cwd terminal detour',
+            mutationProof: {
+              matchedOldString: 'DEBUG_MODE',
+              beforeHash: 'before-hash',
+              afterHash: 'after-hash',
+              occurrencesMatched: 1,
+              readbackVerified: true,
+            },
+          }],
+        })
+
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_fixture_validation',
+                function: { name: 'terminal_exec', arguments: '{"command":"cd /test && node check.js"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_fixture_validation',
+              content: JSON.stringify({
+                tool: 'terminal_exec',
+                args: { command: 'cd /test && node check.js' },
+                ok: true,
+                status: 'executed',
+                summary: 'Command `cd /test && node check.js` succeeded.',
+                backend: {
+                  command: 'cd /test && node check.js',
+                  exitCode: 0,
+                  stdout: 'Check Passed\n',
+                  stderr: '',
+                  effectiveCwd: '/test',
+                  timedOut: false,
+                },
+              }),
+            },
+          ],
+        } as any
+      }
+
+      if (callCount === 3) {
+        expect(opts.system).toContain('terminal_result:cd /test && node check.js')
+        expect(opts.system).toContain('exitCode=0 timedOut=false')
+
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_review',
+                function: { name: 'coding_review_changes', arguments: '{}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_review',
+              content: JSON.stringify({
+                tool: 'coding_review_changes',
+                args: {},
+                ok: true,
+                status: 'ok',
+                backend: {
+                  status: 'ready_for_next_file',
+                  validationCommand: 'cd /test && node check.js',
+                  unresolvedIssues: [],
+                },
+              }),
+            },
+          ],
+        } as any
+      }
+
+      expect(opts.system).toContain('change_review:ready_for_next_file')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed","filesTouched":["src/a.ts"]}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: {
+                status: 'completed',
+                summary: 'Recovered from wrong cwd terminal detour and validated in fixture cwd.',
+                filesTouched: ['src/a.ts'],
+                commandsRun: ['cd /test && node check.js'],
+                checks: ['node check.js passed'],
+              },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Recover from provider cwd terminal noise',
+      maxSteps: 4,
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.error).toBeUndefined()
+    expect(result.totalSteps).toBe(4)
+    expect(callCount).toBe(4)
+    expect(result.turns.map(turn => turn.toolName)).toEqual([
+      'terminal_exec',
+      'terminal_exec',
+      'coding_review_changes',
+      'coding_report_status',
+    ])
+    expect(result.turns[0]).toMatchObject({
+      resultOk: true,
+      rawText: expect.stringContaining('"exitCode":1'),
+    })
+    expect(result.turns[0].rawText).toContain('/Users/liuziheng/airi')
+    expect(result.turns[0].rawText).toContain('No such file or directory')
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'verification_gate_evaluated',
+      payload: expect.objectContaining({
+        gateDecision: 'pass',
+        runnerFinalStatus: 'completed',
+      }),
+    }))
+    expect(events.map(event => event.kind)).not.toContain('budget_exhausted')
+  })
+
   it('fails with BUDGET_EXHAUSTED when maxSteps ends without an accepted report', async () => {
     const { mockRuntime, mockExecuteAction } = createMockDeps()
     const events: CodingRunnerEventEnvelope[] = []

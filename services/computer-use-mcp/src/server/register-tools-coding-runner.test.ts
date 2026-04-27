@@ -131,6 +131,7 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
         getLastScreenshot: vi.fn(() => undefined),
         getSnapshot: vi.fn(() => ({ operationsExecuted: 0, operationUnitsConsumed: 0, pendingActions: [] })),
         getRecentTrace: vi.fn(() => []),
+        getTerminalState: vi.fn(() => createTerminalState()),
       },
       executor: {
         getExecutionTarget: vi.fn().mockResolvedValue(createLocalExecutionTarget()),
@@ -369,5 +370,37 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
     expect(structured.status).toBe('failed')
     expect(structured.lastError).toContain('Verification Gate blocked completion')
     expect(structured.lastError).toContain('reason=review_missing')
+  })
+
+  it('appends lane advisory to tool content without mutating structured payload', async () => {
+    runtime.stateManager.updateInferredLane('coding')
+    const executeAction = vi.fn<ExecuteAction>(async (action: ActionInvocation) => makeExecutedResult(action))
+    const { server, invoke } = createMockServer()
+
+    registerComputerUseTools({
+      server,
+      runtime,
+      executeAction,
+      enableTestTools: false,
+    })
+
+    const result = await invoke('terminal_get_state')
+    const text = result.content.map(item => item.type === 'text' ? item.text : '').join('\n')
+
+    expect(text).toContain('Terminal runner cwd=')
+    expect(text).toContain('Advisory')
+    expect(text).toContain('"coding" lane')
+    expect(text).toContain('"terminal_get_state"')
+    expect(text).toContain('"desktop" lane')
+
+    const structured = result.structuredContent as Record<string, any>
+    expect(structured).toMatchObject({
+      status: 'ok',
+      terminalState: {
+        effectiveCwd: '/Users/liuziheng/airi',
+      },
+    })
+    expect(JSON.stringify(structured)).not.toContain('Advisory')
+    expect(JSON.stringify(structured)).not.toContain('terminal_get_state')
   })
 })

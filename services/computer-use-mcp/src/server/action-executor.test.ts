@@ -132,6 +132,7 @@ function createMockRuntime(params?: {
     runtime,
     session,
     executor,
+    terminalRunner,
     cdpBridgeManager,
   }
 }
@@ -901,6 +902,59 @@ describe('createExecuteAction', () => {
     expect(structuredContent.status).toBe('failed')
     expect(structuredContent.error).toContain('SHELL_COMMAND_DENIED')
     expect(structuredContent.error).toContain('inline_interpreter')
+  })
+
+  it('keeps terminal command cwd separate from remembered terminal state cwd', async () => {
+    const { runtime, session, terminalRunner } = createMockRuntime({
+      configOverrides: { approvalMode: 'never' },
+    })
+    terminalRunner.execute.mockResolvedValue({
+      command: 'cat index.ts',
+      exitCode: 1,
+      stdout: '',
+      stderr: 'cat: index.ts: No such file or directory\n',
+      effectiveCwd: '/tmp/provider-fixture',
+      durationMs: 100,
+      timedOut: false,
+    })
+    terminalRunner.getState.mockReturnValue(createTerminalState({
+      effectiveCwd: '/Users/liuziheng/airi',
+      lastExitCode: 1,
+      lastCommandSummary: 'cat index.ts',
+    }))
+
+    const executeAction = createExecuteAction(runtime)
+    const result = await executeAction({
+      kind: 'terminal_exec',
+      input: {
+        command: 'cat index.ts',
+        cwd: '/tmp/provider-fixture',
+      },
+    }, 'terminal_exec')
+
+    expect(result.isError).not.toBe(true)
+    expect(terminalRunner.execute).toHaveBeenCalledWith({
+      command: 'cat index.ts',
+      cwd: '/tmp/provider-fixture',
+    })
+    expect(session.setTerminalState).toHaveBeenCalledWith(expect.objectContaining({
+      effectiveCwd: '/Users/liuziheng/airi',
+    }))
+
+    const structuredContent = result.structuredContent as Record<string, any>
+    expect(structuredContent.status).toBe('executed')
+    expect(structuredContent.backendResult).toMatchObject({
+      command: 'cat index.ts',
+      exitCode: 1,
+      stderr: 'cat: index.ts: No such file or directory\n',
+      effectiveCwd: '/tmp/provider-fixture',
+      terminalState: {
+        effectiveCwd: '/Users/liuziheng/airi',
+      },
+    })
+    expect(structuredContent.terminalState).toMatchObject({
+      effectiveCwd: '/Users/liuziheng/airi',
+    })
   })
 
   it('coding_apply_patch uses resolved exact paths to fetch mutationProof, avoiding suffix collision', async () => {
