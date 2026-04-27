@@ -1,115 +1,189 @@
 # Desktop Lane Status
 
-Updated: 2026-04-14
+Updated: 2026-04-27
 
-This note is a factual status memo for the current desktop lane work around PR #1649. It is intentionally narrow: only current state, actual blockers, and what should happen now vs later.
+This note is a factual status memo for the current desktop lane. It replaces the
+older PR #1649-era snapshot. Treat it as a recovery map, not architecture
+authority: verify current behavior against code, tests, support matrix entries,
+and live smoke runs before changing runtime.
 
-## What is already true
+## Current Decision
 
-- The desktop lane direction is stable:
-  - macOS only
-  - Chrome-first
-  - visual + semantic tree + OS input
-  - overlay is a visualization layer, not a second system cursor
-- The following baselines already exist in code:
-  - `/Users/liuziheng/airi/services/computer-use-mcp/src/executors/macos-local.ts`
-    - saves the real cursor position and restores it with `CGWarpMouseCursorPosition(...)`
-  - `/Users/liuziheng/airi/apps/stage-tamagotchi/src/main/windows/shared/window.ts`
-    - `makeWindowPassThrough()` uses ignore-mouse-events + non-focusable overlay behavior
-  - `/Users/liuziheng/airi/services/computer-use-mcp/src/browser-dom/cdp-bridge.ts`
-    - 5-second heartbeat with teardown after 3 consecutive failures
-- The Chrome extension bridge and iframe offset work are no longer hypothetical:
-  - PR #1649 already contains a real extension-side WebSocket client bridge
-  - PR #1649 already contains frame offset propagation for iframe DOM candidates
+Desktop v2 runtime discipline has been absorbed into current `origin/main`.
 
-## What is actually still blocking
+Do not continue the old worktrees as implementation bases:
 
-These are the remaining real issues, ordered by severity.
+- `/Users/liuziheng/airi-desktop-v2`
+  - branch: `codex/desktop-v2-runtime-discipline`
+  - status: useful as history only
+  - current target runtime files have no meaningful diff against latest
+    `origin/main`; the remaining branch diff is mostly old-main drift
+- `/Users/liuziheng/airi-pr1649`
+  - branch: `codex/desktop-v3-agent-session`
+  - status: useful as history only
+  - contains old stack state, temporary files, and broad reverse diff against
+    latest `origin/main`
 
-### 1. Extension unknown actions still return `ok: true`
+New desktop v3 work should be recut from latest `origin/main` or from a clean
+worktree based on it. Do not rebase the stale v2/v3 worktrees and carry their
+history forward.
 
-- File:
-  - `/Users/liuziheng/airi-pr1649/services/computer-use-mcp/chrome-extension/background.js`
-- Current behavior:
-  - unsupported actions fall into `result = { error: ... }`
-  - but the response still returns `{ ok: true, result }`
-- Why this matters:
-  - upper layers can interpret unsupported DOM actions as successful bridge execution
-  - that can suppress OS-input fallback even though nothing actually happened
-- This is still a real unresolved review blocker.
+## Direction That Is Still Valid
 
-### 2. Browser-dom click routing still ignores non-default click semantics
+- Platform: macOS first.
+- Browser target: Chrome first.
+- Observation: visual screenshot + accessibility + Chrome semantic DOM.
+- Execution: real OS input for desktop actions; browser DOM bridge is a precise
+  helper path only when capability and click semantics are safe.
+- Overlay: visualization layer for target boxes and ghost pointer state, not a
+  second real system cursor.
+- Completion standard: desktop line needs code + tests + a narrow live smoke
+  before being called product-supported.
 
-- File:
-  - `/Users/liuziheng/airi-pr1649/services/computer-use-mcp/src/browser-action-router.ts`
-  - called from `/Users/liuziheng/airi-pr1649/services/computer-use-mcp/src/server/register-desktop-grounding.ts`
-- Current behavior:
-  - `chrome_dom` candidates route to browser-dom if selector + bridge are available
-  - routing does not currently incorporate `button` / `clickCount`
-- Why this matters:
-  - right-click or double-click can still be routed to a DOM path that only performs a standard primary click
-- This is not as severe as the first issue, but it is still a real correctness gap.
+## Desktop V3 Structure On Current Main
 
-### 3. Overlay lifecycle / RPC readiness is not fully closed yet
+Service-side structure:
 
-- Files currently being worked on:
-  - `/Users/liuziheng/airi-pr1649/apps/stage-tamagotchi/src/main/windows/desktop-overlay/rpc/contracts.ts`
-  - `/Users/liuziheng/airi-pr1649/apps/stage-tamagotchi/src/main/windows/desktop-overlay/rpc/index.electron.ts`
-  - `/Users/liuziheng/airi-pr1649/apps/stage-tamagotchi/src/renderer/pages/desktop-overlay-polling.ts`
-  - `/Users/liuziheng/airi-pr1649/apps/stage-tamagotchi/src/renderer/pages/desktop-overlay-polling.test.ts`
-- Current state:
-  - there is already a preload-order mitigation in `desktop-overlay/index.ts`
-  - there is already a per-call timeout in `desktop-overlay-polling.ts`
-  - there is now work-in-progress code for an explicit readiness contract
-- Why this is not yet "done":
-  - the readiness flow is still uncommitted work
-  - the live window context still needs one narrow verification pass
-- This is not proven broken today, but it is the most likely remaining runtime risk on the overlay path.
+- `services/computer-use-mcp/src/chrome-session-manager.ts`
+  - Owns agent Chrome session lifecycle and foreground restore hooks.
+- `services/computer-use-mcp/src/desktop-session.ts`
+  - Tracks controlled app, owned windows, previous user foreground, and session
+    activity.
+- `services/computer-use-mcp/src/server/register-chrome-session.ts`
+  - Registers `desktop_ensure_chrome`.
+  - Begins a desktop session for Google Chrome.
+  - Best-effort connects CDP from the Chrome session.
+- `services/computer-use-mcp/src/server/register-desktop-grounding.ts`
+  - Registers `desktop_observe` and `desktop_click_target`.
+  - Stores observe screenshots in both grounding state and last-screenshot
+    runtime state.
+  - Delegates target clicks through the shared action executor.
+- `services/computer-use-mcp/src/server/desktop-grounding-actions.ts`
+  - Implements snap resolution, duplicate/stale snapshot checks, browser-DOM
+    fallback, OS input fallback, and pointer intent updates.
+- `services/computer-use-mcp/src/server/action-executor.ts`
+  - Runs `desktop_click_target` through shared policy, approval, audit, budget,
+    and failure response paths.
+  - Uses controlled-app policy context but records the actual foreground when it
+    differs.
+- `services/computer-use-mcp/src/browser-action-router.ts`
+  - Routes browser-DOM clicks only for left single-click.
+  - Forces right/middle/multi-click back to OS input.
+- `services/computer-use-mcp/chrome-extension/background.js`
+  - Actively connects to the local extension bridge.
+  - Unknown actions return `ok: false`.
+  - Frame offsets are propagated for iframe candidates.
 
-## What is not a current blocker
+Desktop app structure:
 
-These items are real ideas or cleanup work, but they are not the thing that should block the line right now.
+- `apps/stage-tamagotchi/src/main/windows/desktop-overlay/index.ts`
+  - Creates the transparent click-through overlay.
+  - Wires desktop-overlay Eventa RPC before loading the renderer page.
+- `apps/stage-tamagotchi/src/main/windows/desktop-overlay/rpc/`
+  - Owns overlay window RPC for calling `computer_use::desktop_get_state`.
+- `apps/stage-tamagotchi/src/renderer/pages/desktop-overlay-polling.ts`
+  - Polls `desktop_get_state` with bounded per-call timeout behavior.
+- `apps/stage-tamagotchi/src/renderer/pages/desktop-overlay-coordinates.ts`
+  - Converts screen-space data to overlay-local coordinates.
+- `apps/stage-tamagotchi/src/renderer/pages/desktop-overlay.vue`
+  - Renders candidate boxes, stale badges, ghost pointer, executing/completed
+    phases, and click ripple.
 
-- Eager overlay init cleanliness in `apps/stage-tamagotchi/src/main/index.ts`
-- Refactoring nested browser-dom routing logic for readability
-- Turning `macos-local.ts` into instant-warp-only fallback with zero motion trace
-- Rewriting overlay visuals, ghost pointer polish, or extra renderer debug UI
+## What Is Confirmed By Tests
 
-## How to interpret m13v's comments
+Latest narrow validation on 2026-04-27:
 
-m13v's comments were useful because they matched the real platform constraints, but they should be split correctly:
+```bash
+pnpm -F @proj-airi/computer-use-mcp exec vitest run src/desktop-session.test.ts src/chrome-session-manager.test.ts src/server/register-chrome-session.test.ts src/server/register-desktop-grounding.test.ts src/server/register-desktop-grounding-tools.test.ts
+pnpm -F @proj-airi/stage-tamagotchi exec vitest run src/renderer/pages/desktop-overlay-polling.test.ts src/renderer/pages/desktop-overlay-coordinates.test.ts
+```
 
-- Already aligned with current code:
-  - save → act → restore cursor pattern
-  - overlay should not intercept user input
-  - heartbeat teardown for crashed CDP sessions
-- Still useful as future refinement:
-  - reducing native motion trace so UI owns more of the visible pointer animation
-  - deeper runtime discipline around session lifecycle
+Result:
 
-In short: m13v gave good runtime advice. That does not mean every suggestion is a current blocker.
+```text
+computer-use-mcp: 5 files passed, 76 tests passed
+stage-tamagotchi overlay: 2 files passed, 35 tests passed
+```
 
-## What should happen now
+This validates the unit/integration contract around session state, Chrome
+session tools, grounding state, target click registration, and overlay polling
+helpers. It is not a live desktop smoke.
 
-1. Fix the extension unknown-action response contract so unsupported actions return `ok: false`.
-2. Restrict browser-dom click routing to left single-click only; force OS-input for right-click or multi-click.
-3. Finish or explicitly shelve the overlay readiness contract work:
-   - if kept, validate it in a live overlay window context before merging
-   - if not finished now, do not half-merge it
+## What Is No Longer A Current Blocker
 
-## What should happen later
+The older PR #1649 blockers below are already resolved on current main:
 
-Only after the above is clean:
+- Extension unknown actions returning `ok: true`.
+  - Current `background.js` returns `ok: false` for unknown actions.
+- Browser-DOM routing ignoring non-default click semantics.
+  - Current `browser-action-router.ts` only uses browser-DOM for left
+    single-click; right/middle/multi-click use OS input.
+- iframe DOM candidate offsets being hypothetical.
+  - Current extension background and Chrome semantic adapter carry frame offsets
+    into candidates.
+- Overlay input interception.
+  - Current overlay window uses ignore-mouse-events and non-focusable behavior.
 
-1. Optional follow-up:
-   - `fix(stage-tamagotchi): validate desktop overlay lifecycle and RPC readiness in live window context`
-2. Optional follow-up:
-   - `refactor(computer-use-mcp): evaluate instant-warp-only macOS fallback against ghost-pointer UX`
-3. Optional follow-up:
-   - strengthen iframe anchor matching when sibling iframes are highly similar
+Do not reopen those as fresh blockers unless a live run proves regression.
 
-## Bottom line
+## Actual Remaining Product Gaps
 
-The desktop lane is not blocked by direction. It is blocked by a small number of correctness issues and one still-open overlay lifecycle validation step.
+These are the real desktop v3 gaps now:
 
-Do not reopen architecture. Do not mix in polish. Do not keep piling unrelated changes onto the same PR.
+1. Live desktop v3 smoke is missing.
+   - Current evidence is mostly unit/integration tests.
+   - There is no narrow green smoke proving:
+     `desktop_ensure_chrome -> desktop_observe -> desktop_click_target ->
+     desktop_get_state/overlay state`.
+
+2. Overlay lifecycle is still not product-proven in a real window context.
+   - The code has preload-order and polling timeout protections.
+   - Tests cover helper behavior.
+   - A live Electron overlay run still needs to prove the renderer can poll MCP
+     state repeatedly without hanging or stealing focus.
+
+3. Support matrix still should not call desktop v3 product-supported until the
+   live smoke exists.
+   - Keep desktop-native claims conservative.
+   - Do not promote support level based on unit tests alone.
+
+4. Old desktop branches need recut, not repair.
+   - Continuing stale branches risks dragging reversed translations, removed
+     files, old transcript state, temporary scripts, and old lockfile changes.
+
+## Next Knife
+
+Recommended next PR:
+
+```text
+test(desktop): add desktop v3 live smoke baseline
+```
+
+Scope:
+
+- Add or wire one narrow smoke script that proves the v3 desktop chain without
+  claiming the whole product is finished.
+- The expected chain should be:
+  1. ensure or join an agent Chrome session
+  2. call `desktop_observe`
+  3. confirm `desktop_get_state` exposes grounding snapshot and pointer state
+  4. execute one safe target-click path in dry-run or controlled local mode
+  5. confirm overlay-polling contract can read the same state shape
+- Keep the smoke deterministic enough for local verification.
+- Do not redesign overlay visuals.
+- Do not change browser-DOM policy unless the smoke exposes a concrete failure.
+
+Follow-up after that, only if the smoke is green:
+
+```text
+docs(computer-use-mcp): mark desktop v3 smoke coverage in support matrix
+```
+
+## Stop Rules
+
+- Do not continue the stale v2/v3 branches as implementation bases.
+- Do not mix desktop v3 smoke, overlay UI polish, extension bridge policy, and
+  support-matrix promotion in one commit.
+- Do not call desktop v3 product-supported until the live smoke exists and is
+  documented.
+- Do not reopen desktop architecture. The direction is stable; the gap is proof.
