@@ -16,6 +16,7 @@ import { ptyDescriptors } from './pty'
 import { globalRegistry, ToolDescriptorRegistry } from './registry'
 import { taskMemoryDescriptors } from './task-memory'
 import { vscodeDescriptors } from './vscode'
+import { workspaceMemoryDescriptors } from './workspace-memory'
 
 /**
  * All public tool descriptors combined.
@@ -28,6 +29,7 @@ export const allDescriptors: ToolDescriptor[] = [
   ...displayDescriptors,
   ...ptyDescriptors,
   ...taskMemoryDescriptors,
+  ...workspaceMemoryDescriptors,
   ...vscodeDescriptors,
   ...metaDescriptors,
 ]
@@ -72,4 +74,5 @@ export {
   ptyDescriptors,
   taskMemoryDescriptors,
   vscodeDescriptors,
+  workspaceMemoryDescriptors,
 }

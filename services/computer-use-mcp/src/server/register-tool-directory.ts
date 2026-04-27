@@ -34,7 +34,7 @@ export function registerToolDirectory({ server }: RegisterToolDirectoryOptions):
     descriptor: requireDescriptor('tool_directory'),
     schema: {
       lane: z.string().optional().describe(
-        'Filter by tool lane (desktop, browser_dom, browser_cdp, coding, pty, display, accessibility, task_memory, vscode, workflow, internal)',
+        'Filter by tool lane (desktop, browser_dom, browser_cdp, coding, pty, display, accessibility, task_memory, workspace_memory, vscode, workflow, internal)',
       ),
       kind: z.string().optional().describe(
         'Filter by tool kind (read, write, control, workflow, memory, internal)',

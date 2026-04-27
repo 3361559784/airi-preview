@@ -36,6 +36,7 @@ export {
   ptyDescriptors,
   taskMemoryDescriptors,
   vscodeDescriptors,
+  workspaceMemoryDescriptors,
 } from './all'
 // Helpers
 export {

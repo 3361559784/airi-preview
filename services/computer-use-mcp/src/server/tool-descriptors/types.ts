@@ -19,6 +19,7 @@ export type ToolLane
     | 'display' // Display enumeration and identification
     | 'accessibility' // Accessibility tree inspection
     | 'task_memory' // Task execution state management
+    | 'workspace_memory' // Governed durable workspace facts/constraints
     | 'vscode' // VS Code CLI automation
     | 'workflow' // Workflow orchestration tools
     | 'internal' // Internal/diagnostic tools
@@ -162,6 +163,7 @@ export function validateDescriptor(descriptor: ToolDescriptor): void {
     'display',
     'accessibility',
     'task_memory',
+    'workspace_memory',
     'vscode',
     'workflow',
     'internal',

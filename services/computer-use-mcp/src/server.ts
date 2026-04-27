@@ -16,6 +16,7 @@ import { registerToolDirectory } from './server/register-tool-directory'
 import { registerToolSearch } from './server/register-tool-search'
 import { registerComputerUseTools } from './server/register-tools'
 import { registerVscodeTools } from './server/register-vscode'
+import { registerWorkspaceMemoryTools } from './server/register-workspace-memory'
 import { createRuntime } from './server/runtime'
 import { initializeGlobalRegistry } from './server/tool-descriptors'
 
@@ -47,6 +48,7 @@ export async function createComputerUseMcpServer(config = resolveComputerUseConf
   })
 
   registerTaskMemoryTools(server, runtime)
+  registerWorkspaceMemoryTools(server, runtime)
 
   registerAccessibilityTools({ server, runtime })
   registerDisplayTools({ server, runtime })
