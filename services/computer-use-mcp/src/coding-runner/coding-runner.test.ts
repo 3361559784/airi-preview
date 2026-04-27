@@ -1136,9 +1136,11 @@ describe('codingRunner', () => {
       const proposeTool = tools.find((toolDef: any) => toolDef.name === 'coding_propose_workspace_memory')
       const searchTool = tools.find((toolDef: any) => toolDef.name === 'coding_search_workspace_memory')
       const readTool = tools.find((toolDef: any) => toolDef.name === 'coding_read_workspace_memory')
+      const promotionTool = tools.find((toolDef: any) => toolDef.name.includes('workspace_memory') && /review|update|activate|promote/i.test(toolDef.name))
       expect(proposeTool).toBeDefined()
       expect(searchTool).toBeDefined()
       expect(readTool).toBeDefined()
+      expect(promotionTool).toBeUndefined()
 
       const proposed = JSON.parse(await proposeTool.execute({
         kind: 'constraint',
@@ -1182,7 +1184,12 @@ describe('codingRunner', () => {
         evidence: 'The package tests are run through pnpm -F @proj-airi/computer-use-mcp test.',
         confidence: 'high',
       })
-      await seedStore.updateStatus(active.id, 'active', true)
+      await seedStore.review({
+        id: active.id,
+        decision: 'activate',
+        reviewer: 'maintainer',
+        rationale: 'Verified against package scripts.',
+      })
       await seedStore.propose({
         kind: 'pitfall',
         statement: 'Unpromoted pnpm proposal must not enter the prompt.',

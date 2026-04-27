@@ -1,6 +1,7 @@
 import type {
   WorkspaceMemoryDraft,
   WorkspaceMemoryEntry,
+  WorkspaceMemoryReviewInput,
   WorkspaceMemorySearchHit,
   WorkspaceMemoryStatus,
 } from './types'
@@ -99,15 +100,15 @@ export class WorkspaceMemoryStore {
     return this.entries.find(entry => entry.id === id)
   }
 
-  async updateStatus(id: string, status: WorkspaceMemoryStatus, humanVerified: boolean): Promise<WorkspaceMemoryEntry> {
+  async review(input: WorkspaceMemoryReviewInput): Promise<WorkspaceMemoryEntry> {
     const pending = this.appendQueue.then(
       async () => {
         await this.init()
-        return this.updateStatusCommitted(id, status, humanVerified)
+        return this.reviewCommitted(input)
       },
       async () => {
         await this.init()
-        return this.updateStatusCommitted(id, status, humanVerified)
+        return this.reviewCommitted(input)
       },
     )
     this.appendQueue = pending.catch(() => undefined)
@@ -204,24 +205,41 @@ export class WorkspaceMemoryStore {
     return entry
   }
 
-  private async updateStatusCommitted(
-    id: string,
-    status: WorkspaceMemoryStatus,
-    humanVerified: boolean,
-  ): Promise<WorkspaceMemoryEntry> {
-    const current = this.read(id)
+  private async reviewCommitted(input: WorkspaceMemoryReviewInput): Promise<WorkspaceMemoryEntry> {
+    const reviewer = normalizeText(input.reviewer)
+    if (!reviewer)
+      throw new Error('Workspace memory review reviewer is required')
+
+    const rationale = normalizeText(input.rationale)
+    if (!rationale)
+      throw new Error('Workspace memory review rationale is required')
+
+    const current = this.read(input.id)
     if (!current)
-      throw new Error(`Workspace memory entry not found: ${id}`)
+      throw new Error(`Workspace memory entry not found: ${input.id}`)
+
+    const nextStatus = statusForReviewDecision(input.decision)
+    if (current.status === nextStatus) {
+      throw new Error(`Workspace memory review is a no-op: ${input.id} is already ${nextStatus}`)
+    }
+
+    const now = new Date().toISOString()
 
     const updated: WorkspaceMemoryEntry = {
       ...current,
-      status,
-      humanVerified,
-      updatedAt: new Date().toISOString(),
+      status: nextStatus,
+      humanVerified: input.decision === 'activate',
+      review: {
+        decision: input.decision,
+        reviewer,
+        rationale,
+        reviewedAt: now,
+      },
+      updatedAt: now,
     }
 
     await this.persist(updated)
-    this.entries = this.entries.map(entry => entry.id === id ? updated : entry)
+    this.entries = this.entries.map(entry => entry.id === input.id ? updated : entry)
     this.dedupKeys.add(dedupKey(updated))
     return updated
   }
@@ -239,6 +257,14 @@ export class WorkspaceMemoryStore {
     if (!this.initialized)
       throw new Error('WorkspaceMemoryStore.init() must be called before reading')
   }
+}
+
+function statusForReviewDecision(decision: WorkspaceMemoryReviewInput['decision']): Extract<WorkspaceMemoryStatus, 'active' | 'rejected'> {
+  if (decision === 'activate')
+    return 'active'
+  if (decision === 'reject')
+    return 'rejected'
+  throw new Error(`Workspace memory review decision is invalid: ${decision}`)
 }
 
 export function workspaceKeyFromPath(workspacePath: string): string {

@@ -1,6 +1,14 @@
 export type WorkspaceMemoryStatus = 'proposed' | 'active' | 'rejected'
 export type WorkspaceMemoryKind = 'constraint' | 'fact' | 'pitfall' | 'command' | 'file_note'
 export type WorkspaceMemoryConfidence = 'low' | 'medium' | 'high'
+export type WorkspaceMemoryReviewDecision = 'activate' | 'reject'
+
+export interface WorkspaceMemoryReview {
+  decision: WorkspaceMemoryReviewDecision
+  reviewer: string
+  rationale: string
+  reviewedAt: string
+}
 
 export interface WorkspaceMemoryEntry {
   id: string
@@ -15,6 +23,7 @@ export interface WorkspaceMemoryEntry {
   sourceRunId: string
   source: 'coding_runner'
   humanVerified: boolean
+  review?: WorkspaceMemoryReview
   createdAt: string
   updatedAt: string
 }
@@ -26,6 +35,13 @@ export interface WorkspaceMemoryDraft {
   confidence?: WorkspaceMemoryConfidence
   tags?: string[]
   relatedFiles?: string[]
+}
+
+export interface WorkspaceMemoryReviewInput {
+  id: string
+  decision: WorkspaceMemoryReviewDecision
+  reviewer: string
+  rationale: string
 }
 
 export interface WorkspaceMemorySearchHit {

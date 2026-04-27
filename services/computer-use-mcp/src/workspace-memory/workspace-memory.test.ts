@@ -30,6 +30,11 @@ describe('workspaceMemoryStore', () => {
     return store
   }
 
+  async function jsonlRows(): Promise<string[]> {
+    const content = await readFile(filePath, 'utf8')
+    return content.trim() ? content.trim().split('\n') : []
+  }
+
   it('keeps proposed entries out of default search and prompt context', async () => {
     const store = await createStore()
     const entry = await store.propose({
@@ -46,7 +51,7 @@ describe('workspaceMemoryStore', () => {
     expect(store.search('pnpm', { includeProposed: true })).toHaveLength(1)
   })
 
-  it('promotes active entries into default search and context with verification marker', async () => {
+  it('reviews proposed entries into active search and context with verification marker', async () => {
     const store = await createStore()
     const proposed = await store.propose({
       kind: 'pitfall',
@@ -56,14 +61,185 @@ describe('workspaceMemoryStore', () => {
       tags: ['eval'],
     })
 
-    const active = await store.updateStatus(proposed.id, 'active', true)
+    const active = await store.review({
+      id: proposed.id,
+      decision: 'activate',
+      reviewer: 'maintainer',
+      rationale: 'Verified against package eval behavior.',
+    })
 
     expect(active.status).toBe('active')
     expect(active.humanVerified).toBe(true)
+    expect(active.review).toMatchObject({
+      decision: 'activate',
+      reviewer: 'maintainer',
+      rationale: 'Verified against package eval behavior.',
+    })
+    expect(active.review?.reviewedAt).toBeTruthy()
     expect(store.search('deterministic')).toHaveLength(1)
     expect(store.search('Fix deterministic CI coverage task')).toHaveLength(1)
     expect(store.toContextString('deterministic')).toContain('[pitfall/high/verified]')
     expect(store.toContextString('deterministic')).toContain('Do not treat live evals')
+  })
+
+  it('reviews proposed entries into rejected state without prompt injection', async () => {
+    const store = await createStore()
+    const proposed = await store.propose({
+      kind: 'fact',
+      statement: 'Speculative one-run observation should not persist.',
+      evidence: 'Only observed once during a local run.',
+    })
+
+    const rejected = await store.review({
+      id: proposed.id,
+      decision: 'reject',
+      reviewer: 'maintainer',
+      rationale: 'One-run observation is not durable workspace knowledge.',
+    })
+
+    expect(rejected.status).toBe('rejected')
+    expect(rejected.humanVerified).toBe(false)
+    expect(rejected.review).toMatchObject({
+      decision: 'reject',
+      reviewer: 'maintainer',
+    })
+    expect(store.search('Speculative')).toEqual([])
+    expect(store.search('Speculative', { includeProposed: true })).toEqual([])
+    expect(store.toContextString('Speculative')).toBe('')
+  })
+
+  it('removes active entries from prompt context when rejected', async () => {
+    const store = await createStore()
+    const proposed = await store.propose({
+      kind: 'constraint',
+      statement: 'Old validation command should be replaced.',
+      evidence: 'Previous package script output.',
+      confidence: 'medium',
+    })
+    const active = await store.review({
+      id: proposed.id,
+      decision: 'activate',
+      reviewer: 'maintainer',
+      rationale: 'Initially matched package scripts.',
+    })
+
+    expect(store.toContextString('validation')).toContain('Old validation command')
+
+    const rejected = await store.review({
+      id: active.id,
+      decision: 'reject',
+      reviewer: 'maintainer',
+      rationale: 'Superseded by newer package scripts.',
+    })
+
+    expect(rejected.status).toBe('rejected')
+    expect(rejected.humanVerified).toBe(false)
+    expect(store.search('validation')).toEqual([])
+    expect(store.toContextString('validation')).toBe('')
+  })
+
+  it('requires a fresh review to reactivate rejected entries', async () => {
+    const store = await createStore()
+    const proposed = await store.propose({
+      kind: 'command',
+      statement: 'Run the filtered package test before claiming green.',
+      evidence: 'Package script supports filtered test execution.',
+      confidence: 'high',
+    })
+    await store.review({
+      id: proposed.id,
+      decision: 'reject',
+      reviewer: 'maintainer-a',
+      rationale: 'Needs stronger evidence.',
+    })
+
+    const reactivated = await store.review({
+      id: proposed.id,
+      decision: 'activate',
+      reviewer: 'maintainer-b',
+      rationale: 'Re-reviewed package scripts and confirmed this command is durable.',
+    })
+
+    expect(reactivated.status).toBe('active')
+    expect(reactivated.humanVerified).toBe(true)
+    expect(reactivated.review).toMatchObject({
+      decision: 'activate',
+      reviewer: 'maintainer-b',
+      rationale: 'Re-reviewed package scripts and confirmed this command is durable.',
+    })
+    expect(store.toContextString('filtered package test')).toContain('[command/high/verified]')
+  })
+
+  it('rejects empty review metadata without appending JSONL rows', async () => {
+    const store = await createStore()
+    const proposed = await store.propose({
+      kind: 'fact',
+      statement: 'Workspace memory review needs concrete rationale.',
+      evidence: 'Governance policy requires reviewer metadata.',
+    })
+    const rowsBefore = await jsonlRows()
+
+    await expect(store.review({
+      id: proposed.id,
+      decision: 'activate',
+      reviewer: ' ',
+      rationale: 'Valid rationale.',
+    })).rejects.toThrow('reviewer is required')
+    await expect(store.review({
+      id: proposed.id,
+      decision: 'activate',
+      reviewer: 'maintainer',
+      rationale: ' ',
+    })).rejects.toThrow('rationale is required')
+
+    expect(await jsonlRows()).toHaveLength(rowsBefore.length)
+    expect(store.read(proposed.id)?.status).toBe('proposed')
+  })
+
+  it('rejects no-op reviews without appending JSONL rows', async () => {
+    const store = await createStore()
+    const proposed = await store.propose({
+      kind: 'pitfall',
+      statement: 'No-op reviews must not pollute append-only memory logs.',
+      evidence: 'Status updates are stored as append-only JSONL rows.',
+    })
+    await store.review({
+      id: proposed.id,
+      decision: 'activate',
+      reviewer: 'maintainer',
+      rationale: 'Confirmed as durable pitfall.',
+    })
+    const rowsBefore = await jsonlRows()
+
+    await expect(store.review({
+      id: proposed.id,
+      decision: 'activate',
+      reviewer: 'maintainer',
+      rationale: 'Duplicate activation should fail.',
+    })).rejects.toThrow('review is a no-op')
+
+    expect(await jsonlRows()).toHaveLength(rowsBefore.length)
+    expect(store.read(proposed.id)?.status).toBe('active')
+  })
+
+  it('rejects invalid review decisions without appending JSONL rows', async () => {
+    const store = await createStore()
+    const proposed = await store.propose({
+      kind: 'fact',
+      statement: 'Review decisions must be explicit governance actions.',
+      evidence: 'Only activate and reject are valid review decisions.',
+    })
+    const rowsBefore = await jsonlRows()
+
+    await expect(store.review({
+      id: proposed.id,
+      decision: 'archive' as any,
+      reviewer: 'maintainer',
+      rationale: 'Invalid decisions must not silently reject memory.',
+    })).rejects.toThrow('review decision is invalid')
+
+    expect(await jsonlRows()).toHaveLength(rowsBefore.length)
+    expect(store.read(proposed.id)?.status).toBe('proposed')
   })
 
   it('deduplicates equivalent proposals for the same workspace', async () => {
@@ -81,7 +257,7 @@ describe('workspaceMemoryStore', () => {
       relatedFiles: ['services/computer-use-mcp/package.json'],
     })
 
-    const lines = (await readFile(filePath, 'utf8')).trim().split('\n')
+    const lines = await jsonlRows()
 
     expect(second.id).toBe(first.id)
     expect(store.getAll()).toHaveLength(1)
@@ -95,7 +271,12 @@ describe('workspaceMemoryStore', () => {
       statement: 'Transcript is the truth source for the coding runner.',
       evidence: 'Runner appends xsai delta messages into TranscriptStore.',
     })
-    await store.updateStatus(proposed.id, 'active', true)
+    await store.review({
+      id: proposed.id,
+      decision: 'activate',
+      reviewer: 'maintainer',
+      rationale: 'Verified transcript storage behavior in runner implementation.',
+    })
 
     const reloaded = await createStore()
     const entry = reloaded.read(proposed.id)
@@ -104,6 +285,11 @@ describe('workspaceMemoryStore', () => {
       id: proposed.id,
       status: 'active',
       humanVerified: true,
+      review: {
+        decision: 'activate',
+        reviewer: 'maintainer',
+        rationale: 'Verified transcript storage behavior in runner implementation.',
+      },
     })
     expect(reloaded.search('truth source')).toHaveLength(1)
   })
@@ -124,8 +310,18 @@ describe('workspaceMemoryStore', () => {
       evidence: 'Evidence B.',
     })
 
-    await storeA.updateStatus(entryA.id, 'active', true)
-    await storeB.updateStatus(entryB.id, 'active', true)
+    await storeA.review({
+      id: entryA.id,
+      decision: 'activate',
+      reviewer: 'maintainer',
+      rationale: 'Repo A fact is scoped to repo A.',
+    })
+    await storeB.review({
+      id: entryB.id,
+      decision: 'activate',
+      reviewer: 'maintainer',
+      rationale: 'Repo B fact is scoped to repo B.',
+    })
 
     const reloadedA = await createStore(workspacePath, 'run-a2')
     const reloadedB = await createStore(workspaceB, 'run-b2')
@@ -154,6 +350,6 @@ describe('workspaceMemoryStore', () => {
 
     const ids = store.getAll().map(entry => entry.id)
     expect(new Set(ids).size).toBe(2)
-    expect((await readFile(filePath, 'utf8')).trim().split('\n')).toHaveLength(2)
+    expect(await jsonlRows()).toHaveLength(2)
   })
 })
