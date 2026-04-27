@@ -19,6 +19,8 @@ const defaultOpenableApps = [
   'Google Chrome',
 ]
 
+const DISPLAY_SIZE_RE = /^(\d+)x(\d+)$/i
+
 function parseBoolean(value: string | undefined, fallback: boolean) {
   if (value == null)
     return fallback
@@ -85,7 +87,7 @@ function parseDisplaySize(value: string | undefined, fallback: DisplaySize): Dis
   if (!value)
     return fallback
 
-  const match = value.trim().match(/^(\d+)x(\d+)$/i)
+  const match = value.trim().match(DISPLAY_SIZE_RE)
   if (!match) {
     throw new Error(`invalid COMPUTER_USE_REMOTE_DISPLAY_SIZE: ${value}`)
   }
@@ -186,6 +188,7 @@ export function resolveComputerUseConfig(): ComputerUseConfig {
     remoteObservationBaseUrl,
     remoteObservationServePort,
     remoteObservationToken: env.COMPUTER_USE_REMOTE_OBSERVATION_TOKEN?.trim() || undefined,
+    workspaceMemoryReviewApplyToken: env.COMPUTER_USE_WORKSPACE_MEMORY_REVIEW_APPLY_TOKEN?.trim() || undefined,
     browserDomBridge: {
       enabled: parseBoolean(env.COMPUTER_USE_BROWSER_DOM_BRIDGE_ENABLED, true),
       host: env.COMPUTER_USE_BROWSER_DOM_BRIDGE_HOST?.trim() || '127.0.0.1',

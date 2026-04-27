@@ -3,6 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { WorkspaceMemoryEntry, WorkspaceMemoryStatus } from '../workspace-memory/types'
 import type { ComputerUseServerRuntime } from './runtime'
 
+import { Buffer } from 'node:buffer'
+import { timingSafeEqual } from 'node:crypto'
 import { join } from 'node:path'
 
 import { z } from 'zod'
@@ -21,6 +23,7 @@ const WHITESPACE_RE = /\s+/g
 
 const statusFilterSchema = z.enum(['proposed', 'active', 'rejected', 'all'])
 const reviewDecisionSchema = z.enum(['activate', 'reject'])
+const reviewRequestStatusFilterSchema = z.enum(['pending', 'applied', 'rejected', 'stale', 'all'])
 
 /**
  * Register external workspace-memory review tools.
@@ -125,20 +128,23 @@ export function registerWorkspaceMemoryTools(server: McpServer, runtime: Compute
   registerToolWithDescriptor(server, {
     descriptor: requireDescriptor('workspace_memory_list_review_requests'),
     schema: {
-      workspacePath: z.string().min(1).describe('Absolute path to the workspace root whose pending memory review requests should be listed.'),
+      workspacePath: z.string().min(1).describe('Absolute path to the workspace root whose memory review requests should be listed.'),
+      status: reviewRequestStatusFilterSchema.optional().describe('Review request status filter. Defaults to pending requests.'),
       query: z.string().optional().describe('Optional case-insensitive query matched against request fields.'),
       limit: z.number().int().min(1).max(MAX_LIST_LIMIT).optional().describe(`Maximum number of requests to return. Default ${DEFAULT_LIST_LIMIT}, max ${MAX_LIST_LIMIT}.`),
     },
-    handler: async ({ workspacePath, query, limit }) => {
+    handler: async ({ workspacePath, status, query, limit }) => {
       const requestStore = await openWorkspaceMemoryReviewRequestStore(runtime, workspacePath)
-      const requests = requestStore.list({ query, limit })
+      const statusFilter = status ?? 'pending'
+      const requests = requestStore.list({ status: statusFilter, query, limit })
 
       return {
-        content: [textContent(`Found ${requests.length} pending workspace memory review request${requests.length === 1 ? '' : 's'}.`)],
+        content: [textContent(`Found ${requests.length} ${statusFilter} workspace memory review request${requests.length === 1 ? '' : 's'}.`)],
         structuredContent: {
           status: 'ok',
           trust: REVIEW_REQUEST_TRUST_BOUNDARY,
           workspaceKey: workspaceKeyFromPath(workspacePath),
+          statusFilter,
           requests,
         },
       }
@@ -148,8 +154,8 @@ export function registerWorkspaceMemoryTools(server: McpServer, runtime: Compute
   registerToolWithDescriptor(server, {
     descriptor: requireDescriptor('workspace_memory_read_review_request'),
     schema: {
-      workspacePath: z.string().min(1).describe('Absolute path to the workspace root whose pending memory review request should be read.'),
-      id: z.string().min(1).describe('Pending review request id returned by workspace_memory_request_review or workspace_memory_list_review_requests.'),
+      workspacePath: z.string().min(1).describe('Absolute path to the workspace root whose memory review request should be read.'),
+      id: z.string().min(1).describe('Review request id returned by workspace_memory_request_review or workspace_memory_list_review_requests.'),
     },
     handler: async ({ workspacePath, id }) => {
       const requestStore = await openWorkspaceMemoryReviewRequestStore(runtime, workspacePath)
@@ -165,6 +171,95 @@ export function registerWorkspaceMemoryTools(server: McpServer, runtime: Compute
           workspaceKey: workspaceKeyFromPath(workspacePath),
           request,
         },
+      }
+    },
+  })
+
+  registerToolWithDescriptor(server, {
+    descriptor: requireDescriptor('workspace_memory_apply_review_request'),
+    schema: {
+      workspacePath: z.string().min(1).describe('Absolute path to the workspace root whose pending memory review request should be applied.'),
+      id: z.string().min(1).describe('Pending review request id returned by workspace_memory_request_review or workspace_memory_list_review_requests.'),
+      approver: z.string().min(1).describe('External approver identity for the authorized review apply.'),
+      rationale: z.string().min(1).describe('Concrete rationale for applying this review request.'),
+      approvalToken: z.string().min(1).describe('Host/client approval token. Never persisted or echoed.'),
+    },
+    handler: async ({ workspacePath, id, approver, rationale, approvalToken }) => {
+      const authError = authorizeWorkspaceMemoryReviewApply(runtime, approvalToken, workspacePath)
+      if (authError)
+        return authError
+
+      const memoryStore = await openWorkspaceMemoryStore(runtime, workspacePath)
+      const requestStore = await openWorkspaceMemoryReviewRequestStore(runtime, workspacePath)
+
+      try {
+        const result = await requestStore.apply(id, { approver, rationale }, (request) => {
+          return memoryStore.read(request.memoryId)
+        }, async (request) => {
+          return await memoryStore.review({
+            id: request.memoryId,
+            decision: request.decision,
+            reviewer: approver,
+            rationale,
+          })
+        })
+
+        return {
+          content: [textContent(`Workspace memory review request ${id} applied. Memory status is now ${result.entry.status}.`)],
+          structuredContent: {
+            status: 'applied',
+            trust: REVIEW_REQUEST_TRUST_BOUNDARY,
+            workspaceKey: workspaceKeyFromPath(workspacePath),
+            request: result.request,
+            entry: toWorkspaceMemorySummary(result.entry),
+          },
+        }
+      }
+      catch (error) {
+        return workspaceMemoryReviewRequestError(
+          error instanceof Error ? error.message : String(error),
+          workspacePath,
+          getWorkspaceMemoryReviewRequestErrorCode(error),
+        )
+      }
+    },
+  })
+
+  registerToolWithDescriptor(server, {
+    descriptor: requireDescriptor('workspace_memory_reject_review_request'),
+    schema: {
+      workspacePath: z.string().min(1).describe('Absolute path to the workspace root whose pending memory review request should be rejected.'),
+      id: z.string().min(1).describe('Pending review request id returned by workspace_memory_request_review or workspace_memory_list_review_requests.'),
+      approver: z.string().min(1).describe('External approver identity for the authorized review rejection.'),
+      rationale: z.string().min(1).describe('Concrete rationale for rejecting this review request.'),
+      approvalToken: z.string().min(1).describe('Host/client approval token. Never persisted or echoed.'),
+    },
+    handler: async ({ workspacePath, id, approver, rationale, approvalToken }) => {
+      const authError = authorizeWorkspaceMemoryReviewApply(runtime, approvalToken, workspacePath)
+      if (authError)
+        return authError
+
+      const requestStore = await openWorkspaceMemoryReviewRequestStore(runtime, workspacePath)
+
+      try {
+        const request = await requestStore.reject(id, { approver, rationale })
+
+        return {
+          content: [textContent(`Workspace memory review request ${id} rejected. No memory status was changed.`)],
+          structuredContent: {
+            status: 'rejected',
+            trust: REVIEW_REQUEST_TRUST_BOUNDARY,
+            workspaceKey: workspaceKeyFromPath(workspacePath),
+            request,
+          },
+        }
+      }
+      catch (error) {
+        return workspaceMemoryReviewRequestError(
+          error instanceof Error ? error.message : String(error),
+          workspacePath,
+          getWorkspaceMemoryReviewRequestErrorCode(error),
+        )
       }
     },
   })
@@ -267,7 +362,44 @@ function workspaceMemoryError(message: string, workspacePath: string) {
   }
 }
 
-function workspaceMemoryReviewRequestError(message: string, workspacePath: string) {
+function authorizeWorkspaceMemoryReviewApply(runtime: ComputerUseServerRuntime, approvalToken: string, workspacePath: string) {
+  const configuredToken = runtime.config.workspaceMemoryReviewApplyToken
+  if (!configuredToken) {
+    return workspaceMemoryReviewRequestError(
+      'Workspace memory review apply is disabled: COMPUTER_USE_WORKSPACE_MEMORY_REVIEW_APPLY_TOKEN is not configured',
+      workspacePath,
+      'WORKSPACE_MEMORY_REVIEW_APPLY_DISABLED',
+    )
+  }
+
+  if (!constantTimeStringEqual(configuredToken, approvalToken)) {
+    return workspaceMemoryReviewRequestError(
+      'Workspace memory review apply denied: invalid approval token',
+      workspacePath,
+      'WORKSPACE_MEMORY_REVIEW_APPLY_DENIED',
+    )
+  }
+
+  return undefined
+}
+
+function constantTimeStringEqual(expected: string, actual: string): boolean {
+  const expectedBuffer = Buffer.from(expected)
+  const actualBuffer = Buffer.from(actual)
+  if (expectedBuffer.length !== actualBuffer.length)
+    return false
+  return timingSafeEqual(expectedBuffer, actualBuffer)
+}
+
+function getWorkspaceMemoryReviewRequestErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error))
+    return undefined
+  if (error.message.includes('target is stale'))
+    return 'WORKSPACE_MEMORY_REVIEW_TARGET_STALE'
+  return undefined
+}
+
+function workspaceMemoryReviewRequestError(message: string, workspacePath: string, code?: string) {
   return {
     isError: true,
     content: [textContent(`Workspace memory review request failed: ${message}`)],
@@ -276,6 +408,7 @@ function workspaceMemoryReviewRequestError(message: string, workspacePath: strin
       trust: REVIEW_REQUEST_TRUST_BOUNDARY,
       workspaceKey: workspaceKeyFromPath(workspacePath),
       error: message,
+      code,
     },
   }
 }

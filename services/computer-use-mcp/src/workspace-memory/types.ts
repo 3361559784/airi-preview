@@ -2,7 +2,7 @@ export type WorkspaceMemoryStatus = 'proposed' | 'active' | 'rejected'
 export type WorkspaceMemoryKind = 'constraint' | 'fact' | 'pitfall' | 'command' | 'file_note'
 export type WorkspaceMemoryConfidence = 'low' | 'medium' | 'high'
 export type WorkspaceMemoryReviewDecision = 'activate' | 'reject'
-export type WorkspaceMemoryReviewRequestStatus = 'pending'
+export type WorkspaceMemoryReviewRequestStatus = 'pending' | 'applied' | 'rejected' | 'stale'
 
 export interface WorkspaceMemoryReview {
   decision: WorkspaceMemoryReviewDecision
@@ -57,12 +57,22 @@ export interface WorkspaceMemoryReviewRequestRecord {
   targetUpdatedAt: string
   targetStatement: string
   createdAt: string
+  resolvedAt?: string
+  resolvedBy?: string
+  resolutionRationale?: string
+  appliedMemoryStatus?: WorkspaceMemoryStatus
+  errorCode?: string
 }
 
 export interface WorkspaceMemoryReviewRequestInput {
   memoryId: string
   decision: WorkspaceMemoryReviewDecision
   requester: string
+  rationale: string
+}
+
+export interface WorkspaceMemoryReviewRequestResolutionInput {
+  approver: string
   rationale: string
 }
 

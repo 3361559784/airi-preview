@@ -146,7 +146,7 @@ describe('registerToolSearch', () => {
     expect((result.content[0] as { text: string }).text).toContain('No tools match')
   })
 
-  it('exposes workspace memory review request tools without mutation tools', async () => {
+  it('exposes workspace memory review request/apply tools without generic mutation tools', async () => {
     initializeGlobalRegistry()
     const { server, invoke } = createMockServer()
     registerToolSearch({ server })
@@ -164,8 +164,9 @@ describe('registerToolSearch', () => {
     expect(names).toContain('workspace_memory_request_review')
     expect(names).toContain('workspace_memory_list_review_requests')
     expect(names).toContain('workspace_memory_read_review_request')
+    expect(names).toContain('workspace_memory_apply_review_request')
+    expect(names).toContain('workspace_memory_reject_review_request')
     expect(names).not.toContain('workspace_memory_review')
     expect(names).not.toContain('workspace_memory_approve_review_request')
-    expect(names).not.toContain('workspace_memory_reject_review_request')
   })
 })

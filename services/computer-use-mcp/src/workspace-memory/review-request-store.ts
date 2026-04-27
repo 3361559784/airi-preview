@@ -2,6 +2,7 @@ import type {
   WorkspaceMemoryEntry,
   WorkspaceMemoryReviewRequestInput,
   WorkspaceMemoryReviewRequestRecord,
+  WorkspaceMemoryReviewRequestResolutionInput,
 } from './types'
 
 import { randomUUID } from 'node:crypto'
@@ -16,6 +17,11 @@ const WHITESPACE_RE = /\s+/g
 
 export interface WorkspaceMemoryReviewRequestStoreOptions {
   workspacePath: string
+}
+
+export interface WorkspaceMemoryReviewRequestApplyResult {
+  request: WorkspaceMemoryReviewRequestRecord
+  entry: WorkspaceMemoryEntry
 }
 
 export class WorkspaceMemoryReviewRequestStore {
@@ -58,13 +64,52 @@ export class WorkspaceMemoryReviewRequestStore {
     return pending
   }
 
-  list(options: { query?: string, limit?: number } = {}): WorkspaceMemoryReviewRequestRecord[] {
+  async apply(
+    requestId: string,
+    input: WorkspaceMemoryReviewRequestResolutionInput,
+    getCurrentEntry: (request: WorkspaceMemoryReviewRequestRecord) => WorkspaceMemoryEntry | undefined | Promise<WorkspaceMemoryEntry | undefined>,
+    applyMemoryReview: (request: WorkspaceMemoryReviewRequestRecord) => Promise<WorkspaceMemoryEntry>,
+  ): Promise<WorkspaceMemoryReviewRequestApplyResult> {
+    const pending = this.appendQueue.then(
+      async () => {
+        await this.init()
+        return this.applyCommitted(requestId, input, getCurrentEntry, applyMemoryReview)
+      },
+      async () => {
+        await this.init()
+        return this.applyCommitted(requestId, input, getCurrentEntry, applyMemoryReview)
+      },
+    )
+    this.appendQueue = pending.catch(() => undefined)
+    return pending
+  }
+
+  async reject(
+    requestId: string,
+    input: WorkspaceMemoryReviewRequestResolutionInput,
+  ): Promise<WorkspaceMemoryReviewRequestRecord> {
+    const pending = this.appendQueue.then(
+      async () => {
+        await this.init()
+        return this.rejectCommitted(requestId, input)
+      },
+      async () => {
+        await this.init()
+        return this.rejectCommitted(requestId, input)
+      },
+    )
+    this.appendQueue = pending.catch(() => undefined)
+    return pending
+  }
+
+  list(options: { query?: string, limit?: number, status?: WorkspaceMemoryReviewRequestRecord['status'] | 'all' } = {}): WorkspaceMemoryReviewRequestRecord[] {
     this.assertInitialized()
     const normalizedQuery = normalizeText(options.query ?? '').toLowerCase()
     const limit = normalizeLimit(options.limit)
+    const status = options.status ?? 'pending'
 
     return this.requests
-      .filter(request => request.status === 'pending')
+      .filter(request => status === 'all' || request.status === status)
       .filter(request => !normalizedQuery || reviewRequestHaystack(request).includes(normalizedQuery))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, limit)
@@ -72,7 +117,7 @@ export class WorkspaceMemoryReviewRequestStore {
 
   read(id: string): WorkspaceMemoryReviewRequestRecord | undefined {
     this.assertInitialized()
-    return this.requests.find(request => request.id === id && request.status === 'pending')
+    return this.requests.find(request => request.id === id)
   }
 
   getAll(): readonly WorkspaceMemoryReviewRequestRecord[] {
@@ -162,6 +207,85 @@ export class WorkspaceMemoryReviewRequestStore {
     return request
   }
 
+  private async applyCommitted(
+    requestId: string,
+    input: WorkspaceMemoryReviewRequestResolutionInput,
+    getCurrentEntry: (request: WorkspaceMemoryReviewRequestRecord) => WorkspaceMemoryEntry | undefined | Promise<WorkspaceMemoryEntry | undefined>,
+    applyMemoryReview: (request: WorkspaceMemoryReviewRequestRecord) => Promise<WorkspaceMemoryEntry>,
+  ): Promise<WorkspaceMemoryReviewRequestApplyResult> {
+    const approver = normalizeApprover(input.approver)
+    const rationale = normalizeResolutionRationale(input.rationale)
+    const request = this.requirePendingRequest(requestId)
+    const currentEntry = await getCurrentEntry(request)
+
+    const staleErrorCode = getTargetStaleErrorCode(request, currentEntry)
+    if (staleErrorCode) {
+      const staleRequest = await this.resolveRequest(request, {
+        status: 'stale',
+        resolvedBy: approver,
+        resolutionRationale: rationale,
+        errorCode: staleErrorCode,
+      })
+      throw new Error(`Workspace memory review request target is stale: ${staleRequest.id} (${staleErrorCode})`)
+    }
+
+    const entry = await applyMemoryReview(request)
+    const appliedRequest = await this.resolveRequest(request, {
+      status: 'applied',
+      resolvedBy: approver,
+      resolutionRationale: rationale,
+      appliedMemoryStatus: entry.status,
+    })
+
+    return {
+      request: appliedRequest,
+      entry,
+    }
+  }
+
+  private async rejectCommitted(
+    requestId: string,
+    input: WorkspaceMemoryReviewRequestResolutionInput,
+  ): Promise<WorkspaceMemoryReviewRequestRecord> {
+    const approver = normalizeApprover(input.approver)
+    const rationale = normalizeResolutionRationale(input.rationale)
+    const request = this.requirePendingRequest(requestId)
+
+    return await this.resolveRequest(request, {
+      status: 'rejected',
+      resolvedBy: approver,
+      resolutionRationale: rationale,
+    })
+  }
+
+  private requirePendingRequest(requestId: string): WorkspaceMemoryReviewRequestRecord {
+    const request = this.requests.find(candidate => candidate.id === requestId)
+    if (!request)
+      throw new Error(`Workspace memory review request not found: ${requestId}`)
+    if (request.status !== 'pending')
+      throw new Error(`Workspace memory review request is not pending: ${requestId} is ${request.status}`)
+    return request
+  }
+
+  private async resolveRequest(
+    request: WorkspaceMemoryReviewRequestRecord,
+    resolution: Pick<WorkspaceMemoryReviewRequestRecord, 'status' | 'resolvedBy' | 'resolutionRationale'> & Pick<Partial<WorkspaceMemoryReviewRequestRecord>, 'appliedMemoryStatus' | 'errorCode'>,
+  ): Promise<WorkspaceMemoryReviewRequestRecord> {
+    const resolved: WorkspaceMemoryReviewRequestRecord = {
+      ...request,
+      status: resolution.status,
+      resolvedAt: new Date().toISOString(),
+      resolvedBy: resolution.resolvedBy,
+      resolutionRationale: resolution.resolutionRationale,
+      appliedMemoryStatus: resolution.appliedMemoryStatus,
+      errorCode: resolution.errorCode,
+    }
+
+    await this.persist(resolved)
+    this.requests = this.requests.map(candidate => candidate.id === request.id ? resolved : candidate)
+    return resolved
+  }
+
   private async persist(request: WorkspaceMemoryReviewRequestRecord): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true })
     await appendFile(this.filePath, `${JSON.stringify(request)}\n`, 'utf8')
@@ -189,6 +313,20 @@ function normalizeText(text: string): string {
   return text.replace(WHITESPACE_RE, ' ').trim()
 }
 
+function normalizeApprover(approver: string): string {
+  const normalized = normalizeText(approver)
+  if (!normalized)
+    throw new Error('Workspace memory review request approver is required')
+  return normalized
+}
+
+function normalizeResolutionRationale(rationale: string): string {
+  const normalized = normalizeText(rationale)
+  if (!normalized)
+    throw new Error('Workspace memory review request resolution rationale is required')
+  return normalized
+}
+
 function normalizeLimit(limit: number | undefined): number {
   if (limit === undefined)
     return 20
@@ -209,7 +347,26 @@ function reviewRequestHaystack(request: WorkspaceMemoryReviewRequestRecord): str
     request.targetStatus,
     request.targetUpdatedAt,
     request.targetStatement,
-  ].join('\n').toLowerCase()
+    request.resolvedBy,
+    request.resolutionRationale,
+    request.appliedMemoryStatus,
+    request.errorCode,
+  ].filter(Boolean).join('\n').toLowerCase()
+}
+
+function getTargetStaleErrorCode(
+  request: WorkspaceMemoryReviewRequestRecord,
+  currentEntry: WorkspaceMemoryEntry | undefined,
+): string | undefined {
+  if (!currentEntry)
+    return 'target_missing'
+  if (currentEntry.status !== request.targetStatus)
+    return 'target_status_changed'
+  if (currentEntry.updatedAt !== request.targetUpdatedAt)
+    return 'target_updated_at_changed'
+  if (currentEntry.statement !== request.targetStatement)
+    return 'target_statement_changed'
+  return undefined
 }
 
 function getNodeErrorCode(error: unknown): string | undefined {

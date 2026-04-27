@@ -79,4 +79,12 @@ describe('resolveComputerUseConfig', () => {
     expect(config.browserDomBridge.port).toBe(8876)
     expect(config.browserDomBridge.requestTimeoutMs).toBe(4500)
   })
+
+  it('parses workspace memory review apply token from env', () => {
+    process.env.COMPUTER_USE_WORKSPACE_MEMORY_REVIEW_APPLY_TOKEN = 'apply-token'
+
+    const config = resolveComputerUseConfig()
+
+    expect(config.workspaceMemoryReviewApplyToken).toBe('apply-token')
+  })
 })

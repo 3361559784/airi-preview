@@ -642,6 +642,7 @@ export interface ComputerUseConfig {
   remoteObservationBaseUrl?: string
   remoteObservationServePort?: number
   remoteObservationToken?: string
+  workspaceMemoryReviewApplyToken?: string
   browserDomBridge: BrowserDomBridgeConfig
   binaries: {
     swift: string

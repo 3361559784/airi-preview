@@ -72,7 +72,12 @@ describe('registerWorkspaceMemoryTools', () => {
     return content.trim() ? content.trim().split('\n') : []
   }
 
-  it('registers request-only workspace memory MCP review tools without mutation or coding model-loop names', () => {
+  async function reviewRequestRows(): Promise<string[]> {
+    const content = await readFile(join(tmpRoot, 'workspace-memory-review-requests', `${workspaceKeyFromPath(workspacePath)}.jsonl`), 'utf8')
+    return content.trim() ? content.trim().split('\n') : []
+  }
+
+  it('registers authorized workspace memory review apply tools without generic or coding model-loop names', () => {
     const { server, hasTool } = createMockServer()
 
     registerWorkspaceMemoryTools(server, runtime)
@@ -82,9 +87,10 @@ describe('registerWorkspaceMemoryTools', () => {
     expect(hasTool('workspace_memory_request_review')).toBe(true)
     expect(hasTool('workspace_memory_list_review_requests')).toBe(true)
     expect(hasTool('workspace_memory_read_review_request')).toBe(true)
+    expect(hasTool('workspace_memory_apply_review_request')).toBe(true)
+    expect(hasTool('workspace_memory_reject_review_request')).toBe(true)
     expect(hasTool('workspace_memory_review')).toBe(false)
     expect(hasTool('workspace_memory_approve_review_request')).toBe(false)
-    expect(hasTool('workspace_memory_reject_review_request')).toBe(false)
     expect(hasTool('coding_review_workspace_memory')).toBe(false)
     expect(hasTool('coding_update_workspace_memory')).toBe(false)
     expect(hasTool('coding_activate_workspace_memory')).toBe(false)
@@ -306,5 +312,241 @@ describe('registerWorkspaceMemoryTools', () => {
     })
     expect(seedStore.read(proposed.id)?.status).toBe('proposed')
     expect(await jsonlRows()).toHaveLength(rowsBefore.length)
+  })
+
+  it('rejects review apply when apply token is not configured', async () => {
+    const seedStore = await createSeedStore()
+    const proposed = await seedStore.propose({
+      kind: 'constraint',
+      statement: 'Apply is disabled without token.',
+      evidence: 'Host must configure a review apply token.',
+    })
+    const { server, invoke } = createMockServer()
+    registerWorkspaceMemoryTools(server, runtime)
+    const requestResult = await invoke('workspace_memory_request_review', {
+      workspacePath,
+      id: proposed.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Request activation.',
+    })
+    const pendingReviewId = (requestResult.structuredContent as any).pendingReviewId
+    const rowsBefore = await jsonlRows()
+
+    const result = await invoke('workspace_memory_apply_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+      approver: 'host',
+      rationale: 'Authorized by host.',
+      approvalToken: 'secret-token',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: expect.not.stringContaining('secret-token'),
+    })
+    expect(result.structuredContent).toMatchObject({
+      status: 'error',
+      trust: 'workspace_memory_review_request_not_instructions',
+      code: 'WORKSPACE_MEMORY_REVIEW_APPLY_DISABLED',
+    })
+    expect(seedStore.read(proposed.id)?.status).toBe('proposed')
+    expect(await jsonlRows()).toHaveLength(rowsBefore.length)
+  })
+
+  it('rejects review apply with a wrong token without echoing it', async () => {
+    runtime.config.workspaceMemoryReviewApplyToken = 'correct-token'
+    const seedStore = await createSeedStore()
+    const proposed = await seedStore.propose({
+      kind: 'fact',
+      statement: 'Wrong tokens cannot apply review requests.',
+      evidence: 'The tool must compare approval tokens.',
+    })
+    const { server, invoke } = createMockServer()
+    registerWorkspaceMemoryTools(server, runtime)
+    const requestResult = await invoke('workspace_memory_request_review', {
+      workspacePath,
+      id: proposed.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Request activation.',
+    })
+    const pendingReviewId = (requestResult.structuredContent as any).pendingReviewId
+
+    const result = await invoke('workspace_memory_apply_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+      approver: 'host',
+      rationale: 'Authorized by host.',
+      approvalToken: 'wrong-token',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(JSON.stringify(result)).not.toContain('wrong-token')
+    expect(result.structuredContent).toMatchObject({
+      status: 'error',
+      code: 'WORKSPACE_MEMORY_REVIEW_APPLY_DENIED',
+    })
+    expect(seedStore.read(proposed.id)?.status).toBe('proposed')
+  })
+
+  it('applies review requests with a correct token through WorkspaceMemoryStore.review', async () => {
+    runtime.config.workspaceMemoryReviewApplyToken = 'correct-token'
+    const seedStore = await createSeedStore()
+    const proposed = await seedStore.propose({
+      kind: 'constraint',
+      statement: 'Authorized apply can activate governed memory.',
+      evidence: 'The host supplied the apply token.',
+      confidence: 'high',
+    })
+    const { server, invoke } = createMockServer()
+    registerWorkspaceMemoryTools(server, runtime)
+    const requestResult = await invoke('workspace_memory_request_review', {
+      workspacePath,
+      id: proposed.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Request activation.',
+    })
+    const pendingReviewId = (requestResult.structuredContent as any).pendingReviewId
+
+    const result = await invoke('workspace_memory_apply_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+      approver: 'host',
+      rationale: 'Verified by external host.',
+      approvalToken: 'correct-token',
+    })
+
+    expect(result.isError).toBeUndefined()
+    expect(JSON.stringify(result)).not.toContain('correct-token')
+    expect(result.structuredContent).toMatchObject({
+      status: 'applied',
+      trust: 'workspace_memory_review_request_not_instructions',
+      request: {
+        id: pendingReviewId,
+        status: 'applied',
+        resolvedBy: 'host',
+        resolutionRationale: 'Verified by external host.',
+        appliedMemoryStatus: 'active',
+      },
+      entry: {
+        id: proposed.id,
+        status: 'active',
+        humanVerified: true,
+      },
+    })
+
+    const reloaded = await createSeedStore()
+    expect(reloaded.read(proposed.id)).toMatchObject({
+      status: 'active',
+      humanVerified: true,
+      review: {
+        decision: 'activate',
+        reviewer: 'host',
+        rationale: 'Verified by external host.',
+      },
+    })
+  })
+
+  it('rejects review requests with a correct token without changing memory status', async () => {
+    runtime.config.workspaceMemoryReviewApplyToken = 'correct-token'
+    const seedStore = await createSeedStore()
+    const proposed = await seedStore.propose({
+      kind: 'pitfall',
+      statement: 'Rejecting a request should not reject memory.',
+      evidence: 'Request rejection is separate from applying a reject decision.',
+    })
+    const { server, invoke } = createMockServer()
+    registerWorkspaceMemoryTools(server, runtime)
+    const requestResult = await invoke('workspace_memory_request_review', {
+      workspacePath,
+      id: proposed.id,
+      decision: 'reject',
+      requester: 'maintainer',
+      rationale: 'Request memory rejection.',
+    })
+    const pendingReviewId = (requestResult.structuredContent as any).pendingReviewId
+    const rowsBefore = await jsonlRows()
+
+    const result = await invoke('workspace_memory_reject_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+      approver: 'host',
+      rationale: 'Do not apply this request.',
+      approvalToken: 'correct-token',
+    })
+
+    expect(result.isError).toBeUndefined()
+    expect(result.structuredContent).toMatchObject({
+      status: 'rejected',
+      request: {
+        id: pendingReviewId,
+        status: 'rejected',
+        resolvedBy: 'host',
+        resolutionRationale: 'Do not apply this request.',
+      },
+    })
+    expect(seedStore.read(proposed.id)?.status).toBe('proposed')
+    expect(await jsonlRows()).toHaveLength(rowsBefore.length)
+    expect(await reviewRequestRows()).toHaveLength(2)
+  })
+
+  it('lists resolved review requests only when explicitly requested', async () => {
+    runtime.config.workspaceMemoryReviewApplyToken = 'correct-token'
+    const seedStore = await createSeedStore()
+    const proposed = await seedStore.propose({
+      kind: 'fact',
+      statement: 'Resolved requests are still auditable.',
+      evidence: 'List supports explicit status filters.',
+    })
+    const { server, invoke } = createMockServer()
+    registerWorkspaceMemoryTools(server, runtime)
+    const requestResult = await invoke('workspace_memory_request_review', {
+      workspacePath,
+      id: proposed.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Request activation.',
+    })
+    const pendingReviewId = (requestResult.structuredContent as any).pendingReviewId
+    await invoke('workspace_memory_apply_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+      approver: 'host',
+      rationale: 'Verified.',
+      approvalToken: 'correct-token',
+    })
+
+    const defaultList = await invoke('workspace_memory_list_review_requests', { workspacePath })
+    expect((defaultList.structuredContent as any).requests).toEqual([])
+
+    const appliedList = await invoke('workspace_memory_list_review_requests', {
+      workspacePath,
+      status: 'applied',
+    })
+    expect(appliedList.structuredContent).toMatchObject({
+      status: 'ok',
+      statusFilter: 'applied',
+      requests: [
+        {
+          id: pendingReviewId,
+          status: 'applied',
+        },
+      ],
+    })
+
+    const readResult = await invoke('workspace_memory_read_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+    })
+    expect(readResult.structuredContent).toMatchObject({
+      status: 'ok',
+      request: {
+        id: pendingReviewId,
+        status: 'applied',
+      },
+    })
   })
 })

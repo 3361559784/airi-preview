@@ -42,6 +42,7 @@ export function createTestConfig(overrides: Partial<ComputerUseConfig> = {}): Co
     remoteObservationBaseUrl: undefined,
     remoteObservationServePort: undefined,
     remoteObservationToken: undefined,
+    workspaceMemoryReviewApplyToken: undefined,
     browserDomBridge: {
       enabled: true,
       host: '127.0.0.1',
