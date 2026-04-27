@@ -18,12 +18,11 @@ import type { OverlayState } from './desktop-overlay-polling'
 
 import { electron } from '@proj-airi/electron-eventa'
 import { useElectronEventaInvoke } from '@proj-airi/electron-vueuse'
-import { getMcpToolBridge } from '@proj-airi/stage-ui/stores/mcp-tool-bridge'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
-import { getDesktopOverlayReadinessContract } from '../../shared/eventa'
+import { electronMcpCallTool, getDesktopOverlayReadinessContract } from '../../shared/eventa'
 import { pointInOverlay, rectIntersectsOverlay, screenRectToLocal, screenToLocal } from './desktop-overlay-coordinates'
-import { createEmptyOverlayState, createOverlayPollController } from './desktop-overlay-polling'
+import { createEmptyOverlayState, createOverlayMcpToolCaller, createOverlayPollController } from './desktop-overlay-polling'
 
 // ---------------------------------------------------------------------------
 // Overlay window bounds — read once on mount from main process
@@ -31,6 +30,7 @@ import { createEmptyOverlayState, createOverlayPollController } from './desktop-
 
 const getWindowBounds = useElectronEventaInvoke(electron.window.getBounds)
 const getReadiness = useElectronEventaInvoke(getDesktopOverlayReadinessContract)
+const callMcpTool = useElectronEventaInvoke(electronMcpCallTool)
 const overlayBounds = ref<Rect | null>(null)
 
 // ---------------------------------------------------------------------------
@@ -71,17 +71,8 @@ const matchedCandidate = computed(() => {
 // Polling controller
 // ---------------------------------------------------------------------------
 
-let bridgeAvailable = false
-
 const controller = createOverlayPollController({
-  callTool: async (name) => {
-    // Probe bridge availability lazily
-    if (!bridgeAvailable) {
-      getMcpToolBridge() // Throws if not set
-      bridgeAvailable = true
-    }
-    return getMcpToolBridge().callTool({ name })
-  },
+  callTool: createOverlayMcpToolCaller(callMcpTool),
   getReadiness: async () => getReadiness(),
   onState: (newState) => {
     state.value = newState

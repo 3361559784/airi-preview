@@ -139,6 +139,11 @@ export interface OverlayPollConfig {
   callTimeoutMs?: number
 }
 
+export type OverlayMcpCallTool = (payload: {
+  name: string
+  arguments?: Record<string, unknown>
+}) => Promise<McpCallToolResult>
+
 const DEFAULT_INTERVAL = 250
 const DEFAULT_FALLBACK_INTERVAL = 500
 const DEFAULT_CALL_TIMEOUT = 5000
@@ -149,6 +154,24 @@ const HUNG_CALL_RECOVERY_INTERVAL_MS = 10_000
  * MCP server name for computer-use-mcp. Matches the key in mcp.json.
  */
 export const MCP_TOOL_NAME = 'computer_use::desktop_get_state'
+
+/**
+ * Adapts the Electron MCP call-tool Eventa invoke to the overlay poller.
+ *
+ * Use when:
+ * - A desktop overlay renderer needs to poll a single MCP tool by name
+ * - The renderer has access to Electron Eventa invokes, but not the chat LLM
+ *   tool bridge
+ *
+ * Expects:
+ * - The main process registered `electronMcpCallTool` for this window context
+ *
+ * Returns:
+ * - A poller-compatible function that calls `{ name }` through Eventa
+ */
+export function createOverlayMcpToolCaller(callMcpTool: OverlayMcpCallTool): OverlayPollConfig['callTool'] {
+  return name => callMcpTool({ name })
+}
 
 /**
  * Create a polling controller that periodically calls desktop_get_state

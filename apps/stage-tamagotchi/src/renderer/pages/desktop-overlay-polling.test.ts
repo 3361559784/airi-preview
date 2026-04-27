@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createEmptyOverlayState,
+  createOverlayMcpToolCaller,
   createOverlayPollController,
   extractOverlayState,
   extractRunStateFromResult,
@@ -149,6 +150,26 @@ describe('createEmptyOverlayState', () => {
     // Should not be the same reference (no shared mutation)
     a.candidates.push({ id: 'x', source: 'raw', role: 'button', label: 'X', bounds: { x: 0, y: 0, width: 10, height: 10 }, confidence: 1 })
     expect(b.candidates).toHaveLength(0)
+  })
+})
+
+describe('createOverlayMcpToolCaller', () => {
+  it('calls the Electron MCP call-tool invoke with the requested tool name', async () => {
+    const mcpResult: McpCallToolResult = {
+      structuredContent: {
+        runState: {
+          lastGroundingSnapshot: { snapshotId: 'dg_eventa_bridge' },
+        },
+      },
+    }
+    const callMcpTool = vi.fn(async () => mcpResult)
+
+    const callTool = createOverlayMcpToolCaller(callMcpTool)
+    const result = await callTool(MCP_TOOL_NAME)
+
+    expect(result).toBe(mcpResult)
+    expect(callMcpTool).toHaveBeenCalledTimes(1)
+    expect(callMcpTool).toHaveBeenCalledWith({ name: MCP_TOOL_NAME })
   })
 })
 
