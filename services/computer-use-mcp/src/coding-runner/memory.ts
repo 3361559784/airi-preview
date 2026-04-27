@@ -138,7 +138,7 @@ export function buildTextOnlyReportRequiredMemory(summary: string): TaskMemoryEx
     status: 'active',
     currentStep: 'Recover from missing terminal report',
     recentFailureReason: reason,
-    nextStep: 'Do not answer with text only. Call coding_report_status(completed) if runtime evidence supports completion; otherwise call coding_report_status(failed) or coding_report_status(blocked).',
+    nextStep: 'Report-only correction: only coding_report_status is available. Do not answer with text only. Do not request Bash, shell, terminal, patch, read/search, or any unavailable tool. Call coding_report_status(completed) only if runtime evidence supports completion; otherwise call coding_report_status(failed) or coding_report_status(blocked).',
   }
 }
 

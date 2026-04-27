@@ -212,6 +212,15 @@ describe('soakHarness', () => {
       expect(s.allowedTools).toEqual(['coding_report_status'])
     })
 
+    it('fake-completion explicitly forbids Bash and unavailable tools after denial', () => {
+      const s = SCENARIOS.find(s => s.key === 'fake-completion')!
+      const prompt = [s.system, s.initialUserMessage].join('\n')
+      expect(prompt).toContain('If completion is denied')
+      expect(prompt).toContain('do not request Bash')
+      expect(prompt).toContain('unavailable tool')
+      expect(prompt).toContain('keep using only coding_report_status')
+    })
+
     it('stalled-read only allows coding_read_file', () => {
       const s = SCENARIOS.find(s => s.key === 'stalled-read')!
       expect(s.allowedTools).toEqual(['coding_read_file'])

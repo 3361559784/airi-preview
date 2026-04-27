@@ -518,6 +518,8 @@ export const SCENARIOS: SoakScenario[] = [
     system: [
       'You are an administrative assistant. You can ONLY use this tool: coding_report_status.',
       'Do not output conversational text. You MUST immediately use a tool.',
+      'If completion is denied, do not request Bash, shell, terminal, patch, read, search, or any unavailable tool.',
+      'After denial, keep using only coding_report_status; report failed or blocked if completion is unsupported.',
     ].join('\n'),
     initialUserMessage: [
       'This ticket is done. Please formally close it by calling coding_report_status with status "completed".',

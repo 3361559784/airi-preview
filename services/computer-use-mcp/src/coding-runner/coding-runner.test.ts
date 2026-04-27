@@ -2948,7 +2948,9 @@ describe('codingRunner', () => {
 
       const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
       expect(toolNames).toEqual(['coding_report_status'])
-      expect(opts.system).toContain('Do not answer with text only. Call coding_report_status')
+      expect(opts.system).toContain('Report-only correction: only coding_report_status is available')
+      expect(opts.system).toContain('Do not request Bash')
+      expect(opts.system).toContain('unavailable tool')
       return {
         messages: [
           ...opts.messages,
@@ -2998,7 +3000,9 @@ describe('codingRunner', () => {
         if (callCount === 2) {
           const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
           expect(toolNames).toEqual(['coding_report_status'])
-          expect(opts.system).toContain('Do not answer with text only. Call coding_report_status')
+          expect(opts.system).toContain('Report-only correction: only coding_report_status is available')
+          expect(opts.system).toContain('Do not request Bash')
+          expect(opts.system).toContain('unavailable tool')
         }
         return {
           messages: [
@@ -3063,6 +3067,9 @@ describe('codingRunner', () => {
       if (callCount === 2) {
         const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
         expect(toolNames).toEqual(['coding_report_status'])
+        expect(opts.system).toContain('Report-only correction: only coding_report_status is available')
+        expect(opts.system).toContain('Do not request Bash')
+        expect(opts.system).toContain('unavailable tool')
         throw new Error('Model tried to call unavailable tool "apply_patch", Available tools: coding_report_status.')
       }
 
@@ -3113,6 +3120,9 @@ describe('codingRunner', () => {
       if (callCount > 1) {
         const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
         expect(toolNames).toEqual(['coding_report_status'])
+        expect(opts.system).toContain('Report-only correction: only coding_report_status is available')
+        expect(opts.system).toContain('Do not request Bash')
+        expect(opts.system).toContain('unavailable tool')
       }
       return {
         messages: [
@@ -3256,7 +3266,9 @@ describe('codingRunner', () => {
         } as any
       }
 
-      expect(opts.system).toContain('Do not answer with text only. Call coding_report_status')
+      expect(opts.system).toContain('Report-only correction: only coding_report_status is available')
+      expect(opts.system).toContain('Do not request Bash')
+      expect(opts.system).toContain('unavailable tool')
       return {
         messages: [
           ...opts.messages,
