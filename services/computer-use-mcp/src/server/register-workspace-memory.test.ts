@@ -72,14 +72,19 @@ describe('registerWorkspaceMemoryTools', () => {
     return content.trim() ? content.trim().split('\n') : []
   }
 
-  it('registers read-only workspace memory MCP review tools without mutation or coding model-loop names', () => {
+  it('registers request-only workspace memory MCP review tools without mutation or coding model-loop names', () => {
     const { server, hasTool } = createMockServer()
 
     registerWorkspaceMemoryTools(server, runtime)
 
     expect(hasTool('workspace_memory_list')).toBe(true)
     expect(hasTool('workspace_memory_read')).toBe(true)
+    expect(hasTool('workspace_memory_request_review')).toBe(true)
+    expect(hasTool('workspace_memory_list_review_requests')).toBe(true)
+    expect(hasTool('workspace_memory_read_review_request')).toBe(true)
     expect(hasTool('workspace_memory_review')).toBe(false)
+    expect(hasTool('workspace_memory_approve_review_request')).toBe(false)
+    expect(hasTool('workspace_memory_reject_review_request')).toBe(false)
     expect(hasTool('coding_review_workspace_memory')).toBe(false)
     expect(hasTool('coding_update_workspace_memory')).toBe(false)
     expect(hasTool('coding_activate_workspace_memory')).toBe(false)
@@ -178,6 +183,128 @@ describe('registerWorkspaceMemoryTools', () => {
       status: 'error',
       error: 'Workspace memory entry not found: missing',
     })
+    expect(await jsonlRows()).toHaveLength(rowsBefore.length)
+  })
+
+  it('creates pending review requests without changing workspace memory status', async () => {
+    const seedStore = await createSeedStore()
+    const proposed = await seedStore.propose({
+      kind: 'constraint',
+      statement: 'Review requests are not automatic activation.',
+      evidence: 'MCP request review is request-only.',
+      confidence: 'medium',
+    })
+    const rowsBefore = await jsonlRows()
+    const { server, invoke } = createMockServer()
+    registerWorkspaceMemoryTools(server, runtime)
+
+    const result = await invoke('workspace_memory_request_review', {
+      workspacePath,
+      id: proposed.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Looks durable, but still needs host-gated apply.',
+    })
+
+    expect(result.isError).toBeUndefined()
+    expect(result.structuredContent).toMatchObject({
+      status: 'approval_required',
+      trust: 'workspace_memory_review_request_not_instructions',
+      pendingReviewId: expect.any(String),
+      request: {
+        memoryId: proposed.id,
+        decision: 'activate',
+        requester: 'maintainer',
+        rationale: 'Looks durable, but still needs host-gated apply.',
+        status: 'pending',
+        targetStatus: 'proposed',
+        targetStatement: proposed.statement,
+      },
+    })
+    expect(seedStore.read(proposed.id)?.status).toBe('proposed')
+    expect(await jsonlRows()).toHaveLength(rowsBefore.length)
+  })
+
+  it('lists and reads pending review requests as governance data', async () => {
+    const seedStore = await createSeedStore()
+    const proposed = await seedStore.propose({
+      kind: 'fact',
+      statement: 'Pending requests are separate governance data.',
+      evidence: 'Review request store is append-only.',
+    })
+    const { server, invoke } = createMockServer()
+    registerWorkspaceMemoryTools(server, runtime)
+
+    const requestResult = await invoke('workspace_memory_request_review', {
+      workspacePath,
+      id: proposed.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Review this proposed fact.',
+    })
+    const pendingReviewId = (requestResult.structuredContent as any).pendingReviewId
+
+    const listResult = await invoke('workspace_memory_list_review_requests', {
+      workspacePath,
+      query: 'separate governance',
+    })
+    expect(listResult.structuredContent).toMatchObject({
+      status: 'ok',
+      trust: 'workspace_memory_review_request_not_instructions',
+      requests: [
+        {
+          id: pendingReviewId,
+          memoryId: proposed.id,
+          status: 'pending',
+        },
+      ],
+    })
+
+    const readResult = await invoke('workspace_memory_read_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+    })
+    expect(readResult.content[0]).toMatchObject({
+      type: 'text',
+      text: expect.stringContaining('not executable instructions'),
+    })
+    expect(readResult.structuredContent).toMatchObject({
+      status: 'ok',
+      trust: 'workspace_memory_review_request_not_instructions',
+      request: {
+        id: pendingReviewId,
+        memoryId: proposed.id,
+        decision: 'activate',
+      },
+    })
+  })
+
+  it('returns review request errors without mutating memory or creating requests', async () => {
+    const seedStore = await createSeedStore()
+    const proposed = await seedStore.propose({
+      kind: 'fact',
+      statement: 'Review request errors should not mutate memory.',
+      evidence: 'Invalid requests fail before appending request rows.',
+    })
+    const rowsBefore = await jsonlRows()
+    const { server, invoke } = createMockServer()
+    registerWorkspaceMemoryTools(server, runtime)
+
+    const result = await invoke('workspace_memory_request_review', {
+      workspacePath,
+      id: proposed.id,
+      decision: 'activate',
+      requester: ' ',
+      rationale: 'Valid rationale.',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.structuredContent).toMatchObject({
+      status: 'error',
+      trust: 'workspace_memory_review_request_not_instructions',
+      error: expect.stringContaining('requester is required'),
+    })
+    expect(seedStore.read(proposed.id)?.status).toBe('proposed')
     expect(await jsonlRows()).toHaveLength(rowsBefore.length)
   })
 })

@@ -145,4 +145,27 @@ describe('registerToolSearch', () => {
     expect((structured.candidates as unknown[]).length).toBe(0)
     expect((result.content[0] as { text: string }).text).toContain('No tools match')
   })
+
+  it('exposes workspace memory review request tools without mutation tools', async () => {
+    initializeGlobalRegistry()
+    const { server, invoke } = createMockServer()
+    registerToolSearch({ server })
+
+    const result = await invoke('tool_search', {
+      query: 'workspace memory review',
+      lane: 'workspace_memory',
+      limit: 10,
+    })
+
+    const structured = result.structuredContent as Record<string, any>
+    const names = (structured.candidates as Array<Record<string, any>>)
+      .map(candidate => candidate.canonicalName)
+
+    expect(names).toContain('workspace_memory_request_review')
+    expect(names).toContain('workspace_memory_list_review_requests')
+    expect(names).toContain('workspace_memory_read_review_request')
+    expect(names).not.toContain('workspace_memory_review')
+    expect(names).not.toContain('workspace_memory_approve_review_request')
+    expect(names).not.toContain('workspace_memory_reject_review_request')
+  })
 })

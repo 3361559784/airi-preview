@@ -7,6 +7,7 @@ import { join } from 'node:path'
 
 import { z } from 'zod'
 
+import { WorkspaceMemoryReviewRequestStore } from '../workspace-memory/review-request-store'
 import { workspaceKeyFromPath, WorkspaceMemoryStore } from '../workspace-memory/store'
 import { textContent } from './content'
 import { registerToolWithDescriptor, requireDescriptor } from './tool-descriptors'
@@ -15,9 +16,11 @@ const DEFAULT_LIST_LIMIT = 20
 const MAX_LIST_LIMIT = 50
 const EVIDENCE_EXCERPT_MAX_CHARS = 500
 const TRUST_BOUNDARY = 'governed_workspace_memory_not_instructions'
+const REVIEW_REQUEST_TRUST_BOUNDARY = 'workspace_memory_review_request_not_instructions'
 const WHITESPACE_RE = /\s+/g
 
 const statusFilterSchema = z.enum(['proposed', 'active', 'rejected', 'all'])
+const reviewDecisionSchema = z.enum(['activate', 'reject'])
 
 /**
  * Register external workspace-memory review tools.
@@ -80,6 +83,91 @@ export function registerWorkspaceMemoryTools(server: McpServer, runtime: Compute
       }
     },
   })
+
+  registerToolWithDescriptor(server, {
+    descriptor: requireDescriptor('workspace_memory_request_review'),
+    schema: {
+      workspacePath: z.string().min(1).describe('Absolute path to the workspace root whose memory entry should be reviewed.'),
+      id: z.string().min(1).describe('Workspace memory entry id returned by workspace_memory_list or workspace_memory_read.'),
+      decision: reviewDecisionSchema.describe('Requested governance decision. This creates a pending request only; it does not activate or reject memory.'),
+      requester: z.string().min(1).describe('External requester identity for the pending review request.'),
+      rationale: z.string().min(1).describe('Concrete rationale for why this review request should be approved later.'),
+    },
+    handler: async ({ workspacePath, id, decision, requester, rationale }) => {
+      const memoryStore = await openWorkspaceMemoryStore(runtime, workspacePath)
+      const requestStore = await openWorkspaceMemoryReviewRequestStore(runtime, workspacePath)
+
+      try {
+        const request = await requestStore.request({
+          memoryId: id,
+          decision,
+          requester,
+          rationale,
+        }, memoryStore.read(id))
+
+        return {
+          content: [textContent(`Workspace memory review request created. Pending review id: ${request.id}. No memory status was changed.`)],
+          structuredContent: {
+            status: 'approval_required',
+            trust: REVIEW_REQUEST_TRUST_BOUNDARY,
+            workspaceKey: workspaceKeyFromPath(workspacePath),
+            pendingReviewId: request.id,
+            request,
+          },
+        }
+      }
+      catch (error) {
+        return workspaceMemoryReviewRequestError(error instanceof Error ? error.message : String(error), workspacePath)
+      }
+    },
+  })
+
+  registerToolWithDescriptor(server, {
+    descriptor: requireDescriptor('workspace_memory_list_review_requests'),
+    schema: {
+      workspacePath: z.string().min(1).describe('Absolute path to the workspace root whose pending memory review requests should be listed.'),
+      query: z.string().optional().describe('Optional case-insensitive query matched against request fields.'),
+      limit: z.number().int().min(1).max(MAX_LIST_LIMIT).optional().describe(`Maximum number of requests to return. Default ${DEFAULT_LIST_LIMIT}, max ${MAX_LIST_LIMIT}.`),
+    },
+    handler: async ({ workspacePath, query, limit }) => {
+      const requestStore = await openWorkspaceMemoryReviewRequestStore(runtime, workspacePath)
+      const requests = requestStore.list({ query, limit })
+
+      return {
+        content: [textContent(`Found ${requests.length} pending workspace memory review request${requests.length === 1 ? '' : 's'}.`)],
+        structuredContent: {
+          status: 'ok',
+          trust: REVIEW_REQUEST_TRUST_BOUNDARY,
+          workspaceKey: workspaceKeyFromPath(workspacePath),
+          requests,
+        },
+      }
+    },
+  })
+
+  registerToolWithDescriptor(server, {
+    descriptor: requireDescriptor('workspace_memory_read_review_request'),
+    schema: {
+      workspacePath: z.string().min(1).describe('Absolute path to the workspace root whose pending memory review request should be read.'),
+      id: z.string().min(1).describe('Pending review request id returned by workspace_memory_request_review or workspace_memory_list_review_requests.'),
+    },
+    handler: async ({ workspacePath, id }) => {
+      const requestStore = await openWorkspaceMemoryReviewRequestStore(runtime, workspacePath)
+      const request = requestStore.read(id)
+      if (!request)
+        return workspaceMemoryReviewRequestError(`Workspace memory review request not found: ${id}`, workspacePath)
+
+      return {
+        content: [textContent(`Read workspace memory review request ${id} as governance data, not executable instructions.`)],
+        structuredContent: {
+          status: 'ok',
+          trust: REVIEW_REQUEST_TRUST_BOUNDARY,
+          workspaceKey: workspaceKeyFromPath(workspacePath),
+          request,
+        },
+      }
+    },
+  })
 }
 
 async function openWorkspaceMemoryStore(runtime: ComputerUseServerRuntime, workspacePath: string): Promise<WorkspaceMemoryStore> {
@@ -87,6 +175,16 @@ async function openWorkspaceMemoryStore(runtime: ComputerUseServerRuntime, works
   const store = new WorkspaceMemoryStore(
     join(runtime.config.sessionRoot, 'workspace-memory', `${workspaceKey}.jsonl`),
     { workspacePath, sourceRunId: 'mcp_workspace_memory_review_surface' },
+  )
+  await store.init()
+  return store
+}
+
+async function openWorkspaceMemoryReviewRequestStore(runtime: ComputerUseServerRuntime, workspacePath: string): Promise<WorkspaceMemoryReviewRequestStore> {
+  const workspaceKey = workspaceKeyFromPath(workspacePath)
+  const store = new WorkspaceMemoryReviewRequestStore(
+    join(runtime.config.sessionRoot, 'workspace-memory-review-requests', `${workspaceKey}.jsonl`),
+    { workspacePath },
   )
   await store.init()
   return store
@@ -163,6 +261,19 @@ function workspaceMemoryError(message: string, workspacePath: string) {
     structuredContent: {
       status: 'error',
       trust: TRUST_BOUNDARY,
+      workspaceKey: workspaceKeyFromPath(workspacePath),
+      error: message,
+    },
+  }
+}
+
+function workspaceMemoryReviewRequestError(message: string, workspacePath: string) {
+  return {
+    isError: true,
+    content: [textContent(`Workspace memory review request failed: ${message}`)],
+    structuredContent: {
+      status: 'error',
+      trust: REVIEW_REQUEST_TRUST_BOUNDARY,
       workspaceKey: workspaceKeyFromPath(workspacePath),
       error: message,
     },
