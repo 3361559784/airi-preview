@@ -237,6 +237,7 @@ describe('toolDescriptorRegistry', () => {
         'display',
         'accessibility',
         'task_memory',
+        'workspace_memory',
         'vscode',
         'workflow',
       ]

@@ -126,6 +126,80 @@ describe('registerToolDirectory', () => {
     }
   })
 
+  it('should expose exact workspace memory tool metadata', async () => {
+    initializeGlobalRegistry()
+    const { server, invoke } = createMockServer()
+    registerToolDirectory({ server })
+
+    const result = await invoke('tool_directory', { lane: 'workspace_memory' })
+    const structured = result.structuredContent as Record<string, unknown>
+    const tools = structured.tools as Array<{
+      canonicalName: string
+      lane: string
+      kind: string
+      readOnly: boolean
+      destructive: boolean
+      concurrencySafe: boolean
+      requiresApprovalByDefault: boolean
+    }>
+
+    expect(tools.map(tool => tool.canonicalName)).toEqual([
+      'workspace_memory_list',
+      'workspace_memory_read',
+      'workspace_memory_request_review',
+      'workspace_memory_list_review_requests',
+      'workspace_memory_read_review_request',
+      'workspace_memory_apply_review_request',
+      'workspace_memory_reject_review_request',
+    ])
+    expect(tools.every(tool => tool.lane === 'workspace_memory')).toBe(true)
+    expect(tools.every(tool => tool.kind === 'memory')).toBe(true)
+
+    const byName = new Map(tools.map(tool => [tool.canonicalName, tool]))
+    expect(byName.get('workspace_memory_list')).toMatchObject({
+      readOnly: true,
+      destructive: false,
+      concurrencySafe: true,
+      requiresApprovalByDefault: false,
+    })
+    expect(byName.get('workspace_memory_read')).toMatchObject({
+      readOnly: true,
+      destructive: false,
+      concurrencySafe: true,
+      requiresApprovalByDefault: false,
+    })
+    expect(byName.get('workspace_memory_request_review')).toMatchObject({
+      readOnly: false,
+      destructive: false,
+      concurrencySafe: false,
+      requiresApprovalByDefault: false,
+    })
+    expect(byName.get('workspace_memory_list_review_requests')).toMatchObject({
+      readOnly: true,
+      destructive: false,
+      concurrencySafe: true,
+      requiresApprovalByDefault: false,
+    })
+    expect(byName.get('workspace_memory_read_review_request')).toMatchObject({
+      readOnly: true,
+      destructive: false,
+      concurrencySafe: true,
+      requiresApprovalByDefault: false,
+    })
+    expect(byName.get('workspace_memory_apply_review_request')).toMatchObject({
+      readOnly: false,
+      destructive: false,
+      concurrencySafe: false,
+      requiresApprovalByDefault: true,
+    })
+    expect(byName.get('workspace_memory_reject_review_request')).toMatchObject({
+      readOnly: false,
+      destructive: false,
+      concurrencySafe: false,
+      requiresApprovalByDefault: true,
+    })
+  })
+
   it('should filter by query', async () => {
     initializeGlobalRegistry()
     const { server, invoke } = createMockServer()
