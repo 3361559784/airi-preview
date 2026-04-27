@@ -136,7 +136,7 @@ describe('codingRunner', () => {
       createdSessionRoots.push(actualSessionRoot)
 
     const taskMemory = new TaskMemoryManager()
-    let runState = createGateReadyState()
+    let runState: any = createGateReadyState()
     const mockRuntime = {
       config: {
         sessionRoot: actualSessionRoot,
@@ -150,6 +150,12 @@ describe('codingRunner', () => {
               ...runState.coding,
               ...update,
             },
+          }
+        }),
+        updateInferredLane: vi.fn((lane: string) => {
+          runState = {
+            ...runState,
+            inferredActiveLane: lane,
           }
         }),
         updateTaskMemory: vi.fn(),
@@ -1349,6 +1355,111 @@ describe('codingRunner', () => {
       seq: 1,
       payload: { toolName: 'coding_read_file' },
     })
+  })
+
+  it('strips cross-lane advisory from model-visible xsai tool summaries without mutating backend', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager.updateInferredLane('coding')
+    mockExecuteAction.mockImplementation(async (action: any) => {
+      if (action?.kind === 'terminal_exec') {
+        return {
+          isError: false,
+          content: [{ type: 'text', text: 'Terminal command completed with cwd=/test.' }],
+          structuredContent: {
+            status: 'ok',
+            backendResult: {
+              exitCode: 0,
+              effectiveCwd: '/test',
+              advisoryEchoCheck: 'backend survives unchanged',
+            },
+          },
+        }
+      }
+      return { isError: false, content: [] }
+    })
+    const events: CodingRunnerEventEnvelope[] = []
+    const emitter = createCodingRunnerEventEmitter('run-advisory-sanitize', (event) => {
+      events.push(event)
+    })
+
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction, { events: emitter })
+    const terminalExec = tools.find((toolDef: any) => toolDef.name === 'terminal_exec')
+    expect(terminalExec).toBeDefined()
+
+    const result = JSON.parse(await terminalExec.execute({ command: 'pwd', cwd: '/test' }))
+
+    expect(result.summary).toContain('Terminal command completed')
+    expect(result.summary).not.toContain('Advisory')
+    expect(result.summary).not.toContain('Consider using a handoff')
+    expect(result.backend).toMatchObject({
+      exitCode: 0,
+      effectiveCwd: '/test',
+      advisoryEchoCheck: 'backend survives unchanged',
+    })
+
+    const completion = events.find(event => event.kind === 'tool_call_completed')
+    expect(completion?.payload).toMatchObject({
+      toolName: 'terminal_exec',
+      ok: true,
+      status: 'ok',
+      summary: 'Terminal command completed with cwd=/test.',
+    })
+    expect(JSON.stringify(completion?.payload)).not.toContain('Advisory')
+    expect(JSON.stringify(completion?.payload)).not.toContain('Consider using a handoff')
+  })
+
+  it('strips cross-lane advisory from model-visible xsai tool errors while preserving real error text', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager.updateInferredLane('coding')
+    mockExecuteAction.mockImplementation(async (action: any) => {
+      if (action?.kind === 'terminal_exec') {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'terminal_exec failed: No such file or directory' }],
+          structuredContent: {
+            status: 'error',
+            backendResult: {
+              exitCode: 1,
+              effectiveCwd: '/wrong',
+            },
+          },
+        }
+      }
+      return { isError: false, content: [] }
+    })
+    const events: CodingRunnerEventEnvelope[] = []
+    const emitter = createCodingRunnerEventEmitter('run-advisory-error-sanitize', (event) => {
+      events.push(event)
+    })
+
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction, { events: emitter })
+    const terminalExec = tools.find((toolDef: any) => toolDef.name === 'terminal_exec')
+    expect(terminalExec).toBeDefined()
+
+    const result = JSON.parse(await terminalExec.execute({ command: 'cat index.ts', cwd: '/wrong' }))
+
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe('error')
+    expect(result.summary).toContain('No such file or directory')
+    expect(result.error).toContain('No such file or directory')
+    expect(result.summary).not.toContain('Advisory')
+    expect(result.error).not.toContain('Advisory')
+    expect(result.error).not.toContain('Consider using a handoff')
+    expect(result.backend).toMatchObject({
+      exitCode: 1,
+      effectiveCwd: '/wrong',
+    })
+
+    const completion = events.find(event => event.kind === 'tool_call_completed')
+    expect(completion?.payload).toMatchObject({
+      toolName: 'terminal_exec',
+      ok: false,
+      status: 'error',
+    })
+    expect(completion?.payload.summary).toContain('No such file or directory')
+    expect(completion?.payload.error).toContain('No such file or directory')
+    expect(JSON.stringify(completion?.payload)).not.toContain('Advisory')
+    expect(JSON.stringify(completion?.payload)).not.toContain('Consider using a handoff')
   })
 
   it('does not expose runner-owned bootstrap tools to the xsai model loop', async () => {

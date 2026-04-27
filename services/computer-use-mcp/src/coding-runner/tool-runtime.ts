@@ -17,6 +17,13 @@ import { registerComputerUseTools } from '../server/register-tools'
 import { initializeGlobalRegistry } from '../server/tool-descriptors'
 
 const ARCHIVE_RECALL_DENIED = 'ARCHIVE_RECALL_DENIED'
+const CROSS_LANE_ADVISORY_PATTERN = new RegExp([
+  '(?:\\r?\\n)*\\s*',
+  '(?:\\u{1F4A1}\\s*)?',
+  'Advisory: You are currently in the "[^"]+" lane but called ',
+  '"[^"]+" which belongs to the "[^"]+" lane\\. ',
+  'Consider using a handoff if you need to switch execution surfaces\\.',
+].join(''), 'gu')
 
 const ALLOWED_CODING_TOOLS = [
   'coding_read_file',
@@ -40,6 +47,13 @@ const ALLOWED_CODING_TOOLS = [
 function compactBackend(name: string, structured: any) {
   // Same logic as soak, or simply pass through
   return structured.backendResult || structured
+}
+
+function sanitizeCodingToolTextForModel(text: string): string {
+  return text
+    .replace(CROSS_LANE_ADVISORY_PATTERN, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 export interface BuildXsaiCodingToolsOptions {
@@ -81,10 +95,11 @@ export async function buildXsaiCodingTools(
           try {
             const mcpResult = await handler(input)
             const textContent = (mcpResult.content || []).map((c: any) => c.text).join('\n')
+            const modelVisibleText = sanitizeCodingToolTextForModel(textContent)
             const structured = mcpResult.structuredContent || {}
             const status = structured.status || (mcpResult.isError ? 'error' : 'ok')
-            const summary = textContent.slice(0, 500)
-            const error = mcpResult.isError ? textContent : undefined
+            const summary = modelVisibleText.slice(0, 500)
+            const error = mcpResult.isError ? modelVisibleText : undefined
             await options.events?.emit('tool_call_completed', {
               toolName: name,
               ok: !mcpResult.isError,
