@@ -161,6 +161,17 @@ Concise but detailed reference for contributors working across the `moeru-ai/air
 - Summarize changes, how tested (commands), and follow-ups.
 - Improve legacy you touch; avoid one-off patterns.
 - Keep changes scoped; use workspace filters (`pnpm -F <workspace> <script>`).
+- Desktop-line work uses a fast preview-sync lane before upstream review. Keep
+  local desktop work in a dedicated desktop branch/worktree, push iteration
+  branches to `preview` (`https://github.com/3361559784/airi-preview`) for fast
+  AI review/sync, then open upstream PRs against `origin`
+  (`https://github.com/moeru-ai/airi`) only after the commit stack is clean.
+- Split desktop-line commits by concern: service runtime, stage-tamagotchi UI,
+  tests, docs/handoff, and eval/smoke evidence should be separate commits unless
+  a change is mechanically inseparable.
+- Do not treat the preview remote as a quality bypass. Preview sync is for fast
+  iteration; upstream PRs still need conservative scope, evidence-backed tests,
+  and a clear keep/revert/split follow-up recommendation.
 - Maintain structured `README.md` documentation for each `packages/` and `apps/` entry, covering what it does, how to use it, when to use it, and when not to use it.
 - Always run `pnpm typecheck` and `pnpm lint:fix` after finishing a task.
 - Use Conventional Commits for commit messages (e.g., `feat: add runner reconnect backoff`).
