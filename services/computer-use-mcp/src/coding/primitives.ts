@@ -5189,13 +5189,6 @@ export class CodingPrimitives {
 
       this.enforceAnalysisLimit()
 
-      const existingState = state.readFileState?.[absPath]
-      if (existingState && existingState.rangeStr === rangeStr && existingState.mtimeMs === mtimeMs) {
-        const recentReads = [...state.recentReads, { path: resolvedFilePath, range: rangeStr }]
-        this.runtime.stateManager.updateCodingState({ recentReads })
-        return `[File content unchanged: ${resolvedFilePath} (${rangeStr})]`
-      }
-
       const content = await fs.readFile(absPath, 'utf8')
       const lines = content.split('\n')
 
@@ -5495,7 +5488,9 @@ export class CodingPrimitives {
       }
 
       const recentEdits = [...state.recentEdits, { path: resolvedFilePath, summary, mutationProof }]
-      this.runtime.stateManager.updateCodingState({ recentEdits })
+      const readFileState = { ...state.readFileState }
+      delete readFileState[absPath]
+      this.runtime.stateManager.updateCodingState({ recentEdits, readFileState })
 
       this.recordStateAdvancingTransition()
 

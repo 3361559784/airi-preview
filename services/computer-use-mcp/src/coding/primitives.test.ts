@@ -149,6 +149,27 @@ describe('codingPrimitives', () => {
     expect(result).toBe('file content')
   })
 
+  it('returns real file content instead of an unchanged placeholder when read state matches', async () => {
+    const absolutePath = '/mock/workspace/root/src/example.ts'
+    const { runtime } = createRuntime({
+      readFileState: {
+        [absolutePath]: {
+          mtimeMs: 123,
+          rangeStr: 'all',
+        },
+      },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    vi.mocked(fs.stat).mockResolvedValue({ mtimeMs: 123 } as any)
+    vi.mocked(fs.readFile).mockResolvedValue('file content')
+
+    const result = await primitives.readFile('src/example.ts')
+
+    expect(result).toBe('file content')
+    expect(result).not.toContain('File content unchanged')
+  })
+
   it('provides compressContext deterministically', async () => {
     const { runtime } = createRuntime()
     // @ts-expect-error mock runtime
@@ -232,6 +253,35 @@ describe('codingPrimitives', () => {
     expect(recentEdit.mutationProof).toBeDefined()
     expect(recentEdit.mutationProof.readbackVerified).toBe(true)
     expect(recentEdit.mutationProof.beforeHash).not.toBe(recentEdit.mutationProof.afterHash)
+  })
+
+  it('invalidates cached readFile state after applyPatch so immediate reread returns patched content', async () => {
+    const absolutePath = '/mock/workspace/root/target.txt'
+    const initialContent = 'export const flag = false\n'
+    const finalContent = 'export const flag = true\n'
+    const { runtime } = createRuntime({
+      readFileState: {
+        [absolutePath]: {
+          mtimeMs: 123,
+          rangeStr: 'all',
+        },
+      },
+    })
+    const primitives = new CodingPrimitives(runtime as any)
+
+    vi.mocked(fs.readFile)
+      .mockResolvedValueOnce(initialContent)
+      .mockResolvedValueOnce(finalContent)
+      .mockResolvedValueOnce(finalContent)
+    vi.mocked(fs.writeFile).mockResolvedValue()
+    vi.mocked(fs.stat).mockResolvedValue({ mtimeMs: 123 } as any)
+
+    await primitives.applyPatch('target.txt', 'export const flag = false', 'export const flag = true')
+
+    const reread = await primitives.readFile('target.txt')
+
+    expect(reread).toBe(finalContent)
+    expect(fs.readFile).toHaveBeenLastCalledWith(absolutePath, 'utf8')
   })
 
   it('fails applyPatch if readback verification mismatches', async () => {
