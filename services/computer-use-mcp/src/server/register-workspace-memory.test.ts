@@ -391,6 +391,59 @@ describe('registerWorkspaceMemoryTools', () => {
     expect(seedStore.read(proposed.id)?.status).toBe('proposed')
   })
 
+  it('rejects review request rejection with a wrong token without echoing it', async () => {
+    runtime.config.workspaceMemoryReviewApplyToken = 'correct-token'
+    const seedStore = await createSeedStore()
+    const proposed = await seedStore.propose({
+      kind: 'pitfall',
+      statement: 'Wrong tokens cannot reject review requests.',
+      evidence: 'The reject endpoint must use the same apply-token gate.',
+    })
+    const { server, invoke } = createMockServer()
+    registerWorkspaceMemoryTools(server, runtime)
+    const requestResult = await invoke('workspace_memory_request_review', {
+      workspacePath,
+      id: proposed.id,
+      decision: 'reject',
+      requester: 'maintainer',
+      rationale: 'Request memory rejection.',
+    })
+    const pendingReviewId = (requestResult.structuredContent as any).pendingReviewId
+    const memoryRowsBefore = await jsonlRows()
+    const requestRowsBefore = await reviewRequestRows()
+
+    const result = await invoke('workspace_memory_reject_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+      approver: 'host',
+      rationale: 'Reject this governance request.',
+      approvalToken: 'wrong-token',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(JSON.stringify(result)).not.toContain('wrong-token')
+    expect(result.structuredContent).toMatchObject({
+      status: 'error',
+      trust: 'workspace_memory_review_request_not_instructions',
+      code: 'WORKSPACE_MEMORY_REVIEW_APPLY_DENIED',
+    })
+    expect(seedStore.read(proposed.id)?.status).toBe('proposed')
+    expect(await jsonlRows()).toHaveLength(memoryRowsBefore.length)
+    expect(await reviewRequestRows()).toHaveLength(requestRowsBefore.length)
+
+    const readResult = await invoke('workspace_memory_read_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+    })
+    expect(readResult.structuredContent).toMatchObject({
+      status: 'ok',
+      request: {
+        id: pendingReviewId,
+        status: 'pending',
+      },
+    })
+  })
+
   it('applies review requests with a correct token through WorkspaceMemoryStore.review', async () => {
     runtime.config.workspaceMemoryReviewApplyToken = 'correct-token'
     const seedStore = await createSeedStore()
