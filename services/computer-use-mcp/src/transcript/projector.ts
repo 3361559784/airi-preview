@@ -137,6 +137,9 @@ function entryToMessage(entry: TranscriptEntry): TranscriptProjectedMessage {
   if (entry.toolCallId) {
     msg.tool_call_id = entry.toolCallId
   }
+  if (entry.role === 'assistant' && entry.reasoningContent) {
+    msg.reasoning_content = entry.reasoningContent
+  }
   return msg
 }
 

@@ -231,6 +231,7 @@ describe('transcriptStore', () => {
     await store.appendRawMessage({
       role: 'assistant',
       content: 'let me check',
+      reasoning_content: 'I should inspect the file before answering.',
       tool_calls: [{
         id: 'tc1',
         type: 'function',
@@ -255,9 +256,38 @@ describe('transcriptStore', () => {
     expect(all).toHaveLength(3)
     expect(all[0].toolCalls).toHaveLength(1)
     expect(all[0].toolCalls![0].function.name).toBe('read_file')
+    expect(all[0].reasoningContent).toBe('I should inspect the file before answering.')
     expect(all[1].role).toBe('tool')
     expect(all[1].toolCallId).toBe('tc1')
     expect(all[2].content).toBe('I see the issue')
+  })
+
+  it('projects assistant reasoning_content for provider replay without turning it into prompt text', async () => {
+    const store = new InMemoryTranscriptStore()
+    await store.init()
+
+    await store.appendUser('Use a tool.')
+    await store.appendRawMessage({
+      role: 'assistant',
+      content: '',
+      reasoning_content: 'Provider thinking payload that must be round-tripped.',
+      tool_calls: [{
+        id: 'tc_reasoning',
+        type: 'function',
+        function: { name: 'read_file', arguments: '{"path":"index.ts"}' },
+      }],
+    })
+    await store.appendRawMessage({
+      role: 'tool',
+      content: 'file contents',
+      tool_call_id: 'tc_reasoning',
+    })
+
+    const projected = projectTranscript(store.getAll())
+    const assistant = projected.messages.find(message => message.role === 'assistant' && message.tool_calls)
+
+    expect(assistant?.reasoning_content).toBe('Provider thinking payload that must be round-tripped.')
+    expect(assistant?.content).toBe('')
   })
 
   it('appendRawMessage skips tool messages without a valid tool_call_id', async () => {

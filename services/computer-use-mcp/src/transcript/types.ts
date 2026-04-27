@@ -40,6 +40,11 @@ export interface TranscriptEntry {
    * For tool result messages: the id of the tool_call this responds to.
    */
   toolCallId?: string
+  /**
+   * Provider-specific assistant reasoning payload that must be replayed for
+   * some OpenAI-compatible thinking-mode providers (for example DeepSeek).
+   */
+  reasoningContent?: string
 }
 
 export interface TranscriptToolCall {
@@ -142,6 +147,7 @@ export interface TranscriptProjectedMessage {
   content?: string | unknown[]
   tool_calls?: TranscriptToolCall[]
   tool_call_id?: string
+  reasoning_content?: string
 }
 
 export interface TranscriptProjectionMetadata {

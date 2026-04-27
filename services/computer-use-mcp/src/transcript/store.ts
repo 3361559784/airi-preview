@@ -116,11 +116,13 @@ export class TranscriptStore {
   async appendRawMessage(msg: {
     role: string
     content?: unknown
+    reasoning_content?: unknown
     tool_calls?: Array<{ id: string, type: string, function: { name: string, arguments: string } }>
     tool_call_id?: string
   }): Promise<TranscriptEntry | null> {
     if (msg.role === 'assistant') {
       const toolCalls = msg.tool_calls
+      const reasoningContent = normalizeReasoningContent(msg.reasoning_content)
       if (toolCalls && toolCalls.length > 0) {
         const tcs: TranscriptToolCall[] = toolCalls.map(tc => ({
           id: tc.id,
@@ -128,11 +130,11 @@ export class TranscriptStore {
           function: { name: tc.function.name, arguments: tc.function.arguments },
         }))
         const content = normalizeContent(msg.content)
-        return this.appendAssistantToolCalls(tcs, content)
+        return this.append({ role: 'assistant', content, toolCalls: tcs, reasoningContent })
       }
       else {
         const content = normalizeContent(msg.content)
-        return this.appendAssistantText(content ?? '')
+        return this.append({ role: 'assistant', content: content ?? '', reasoningContent })
       }
     }
     else if (msg.role === 'tool') {
@@ -263,6 +265,13 @@ function normalizeContent(content: unknown): string | unknown[] | undefined {
     return content
   // Fallback: coerce to string
   return String(content)
+}
+
+function normalizeReasoningContent(content: unknown): string | undefined {
+  if (typeof content !== 'string')
+    return undefined
+  const trimmed = content.trim()
+  return trimmed ? content : undefined
 }
 
 function getNodeErrorCode(error: unknown): string | undefined {
