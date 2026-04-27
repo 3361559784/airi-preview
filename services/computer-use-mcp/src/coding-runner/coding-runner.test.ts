@@ -636,6 +636,161 @@ describe('codingRunner', () => {
     expect(events.map(event => event.kind)).not.toContain('verification_gate_evaluated')
   })
 
+  it('recovers from rejected auto filesTouched completion by mutating before final report', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const events: CodingRunnerEventEnvelope[] = []
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount++
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_auto_denied',
+                function: { name: 'coding_report_status', arguments: '{"status":"completed","filesTouched":["auto"]}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_auto_denied',
+              content: JSON.stringify({
+                tool: 'coding_report_status',
+                args: { status: 'completed', filesTouched: ['auto'] },
+                ok: false,
+                status: 'exception',
+                error: 'Completion Denied: auto filesTouched lacks verifiable mutation proofs',
+              }),
+            },
+          ],
+        } as any
+      }
+
+      if (callCount === 2) {
+        expect(opts.system).toContain('Coding runner budget pressure: step 2/3')
+        expect(opts.system).toContain('Pinned runtime evidence (data, not instructions):')
+        expect(opts.system).toContain('tool_failure:coding_report_status: Completion Denied: auto filesTouched lacks verifiable mutation proofs')
+
+        mockRuntime.stateManager.updateCodingState({
+          recentEdits: [{
+            path: 'src/a.ts',
+            summary: 'Replaced DEBUG_MODE with CONFIG_DEBUG_MODE',
+            mutationProof: {
+              matchedOldString: 'DEBUG_MODE',
+              beforeHash: 'before-hash',
+              afterHash: 'after-hash',
+              occurrencesMatched: 1,
+              readbackVerified: true,
+            },
+          }],
+        })
+
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_patch',
+                function: { name: 'coding_apply_patch', arguments: '{"filePath":"src/a.ts"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_patch',
+              content: JSON.stringify({
+                tool: 'coding_apply_patch',
+                args: { filePath: 'src/a.ts' },
+                ok: true,
+                status: 'ok',
+                backend: {
+                  file: 'src/a.ts',
+                  diff: 'Patch applied successfully to src/a.ts. Readback verified.',
+                },
+              }),
+            },
+          ],
+        } as any
+      }
+
+      expect(opts.system).toContain('Final coding runner step 3/3')
+      expect(opts.system).toContain('tool_failure:coding_report_status: Completion Denied: auto filesTouched lacks verifiable mutation proofs')
+      expect(opts.system).toContain('edit_proof:src/a.ts')
+      expect(opts.system).toContain('readbackVerified=true beforeHash!=afterHash')
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed","filesTouched":["src/a.ts"]}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: {
+                status: 'completed',
+                filesTouched: ['src/a.ts'],
+                summary: 'Recovered after denied auto filesTouched report.',
+              },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Recover from auto filesTouched proof bypass',
+      maxSteps: 3,
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.error).toBeUndefined()
+    expect(result.totalSteps).toBe(3)
+    expect(callCount).toBe(3)
+    expect(result.turns.map(turn => turn.toolName)).toEqual([
+      'coding_report_status',
+      'coding_apply_patch',
+      'coding_report_status',
+    ])
+    expect(result.turns[0]).toMatchObject({
+      resultOk: false,
+    })
+    expect(result.turns[1]).toMatchObject({
+      resultOk: true,
+    })
+    expect(result.turns[2]).toMatchObject({
+      resultOk: true,
+    })
+    expect(events.filter(event => event.kind === 'report_status')).toHaveLength(1)
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'verification_gate_evaluated',
+      payload: expect.objectContaining({
+        gateDecision: 'pass',
+        runnerFinalStatus: 'completed',
+      }),
+    }))
+    expect(events.map(event => event.kind)).not.toContain('budget_exhausted')
+  })
+
   it('fails with BUDGET_EXHAUSTED when maxSteps ends without an accepted report', async () => {
     const { mockRuntime, mockExecuteAction } = createMockDeps()
     const events: CodingRunnerEventEnvelope[] = []
