@@ -51,15 +51,40 @@ Default worker posture:
 - Use Spark subagents aggressively for fast read-only repo exploration, test
   discovery, and diff review.
 - Use Copilot CLI aggressively for external read-only plan/review passes.
-- Prefer the cheapest reliable Copilot model for high-frequency low-risk scans,
-  sanity checks, and alternate test ideas.
-- Use stronger Copilot-side models for harder code review, implementation
-  reasoning, or candidate patch review, not routine scans.
+- Use Copilot GPT-5 mini and GPT-4.1 aggressively for high-frequency low-risk
+  scans, sanity checks, alternate test ideas, and cheap second opinions.
+- Use Copilot `gpt-5.3-codex` with `xhigh` effort for harder code review,
+  implementation reasoning, or candidate patch review. Prefer `xhigh` over
+  `high` when asking Copilot to judge subtle runtime or memory-governance diffs.
 - If model names change, preserve the role split: cheap/fast worker for triage,
   stronger coding model for hard review, GPT-5.5 as final controller.
 - Use Gemini CLI for broad context review, independent risk checks, and
-  second-opinion architecture/readability passes.
+  second-opinion architecture/readability passes. Prefer Gemini 3 Pro for
+  default Gemini review sessions. If the Gemini 3 family exposes Gemini 3.1 Pro
+  in the current CLI/account, select it before deep reviews.
 - If Gemini quota or latency is bad, fall back to Copilot workers.
+
+Session discipline:
+
+- Prefer reusable background/interactive sessions for repeated Copilot or Gemini
+  reviews in the same workstream. Do not reflexively open one-shot sessions and
+  throw them away when a persistent session can keep useful review context.
+- For Copilot, use named/resumable plan-mode sessions for longer reviews, for
+  example `gh copilot --model gpt-5.3-codex --effort xhigh --mode plan
+  --name computer-use-mcp-review`. Resume with `--resume` / `--continue` when
+  continuing the same review thread.
+- For quick Copilot one-shots, `-p` is fine, but treat the result as disposable.
+  Prefer `gpt-5-mini` or `gpt-4.1` for cheap checks and `gpt-5.3-codex xhigh`
+  for hard review.
+- For Gemini, start read-only review sessions with plan approval, for example
+  `gemini --approval-mode plan --skip-trust -i "<prompt>"`. Set the model at
+  startup with `--model` when the exact model name is known, or use `/model` in
+  the interactive session to select Gemini 3 Pro / Gemini 3.1 Pro when
+  available. Resume with `gemini --resume latest` or a specific session id.
+- If Codex captures an interactive worker as a running terminal session, keep
+  the session id and send follow-up prompts to that session instead of spawning a
+  new worker. If the command was run with non-interactive `-p` and exits, it is
+  not reusable; use the tool's resume feature or start a new named session.
 
 Recommended dispatch:
 
