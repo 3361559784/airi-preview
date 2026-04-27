@@ -450,6 +450,65 @@ describe('registerWorkspaceMemoryTools', () => {
     })
   })
 
+  it('returns WORKSPACE_MEMORY_REVIEW_TARGET_STALE when applying a request whose target memory changed', async () => {
+    runtime.config.workspaceMemoryReviewApplyToken = 'correct-token'
+    const seedStore = await createSeedStore()
+    const proposed = await seedStore.propose({
+      kind: 'constraint',
+      statement: 'Stale review requests must not activate changed memory.',
+      evidence: 'Review request snapshots must match the target entry.',
+    })
+    const { server, invoke } = createMockServer()
+    registerWorkspaceMemoryTools(server, runtime)
+    const requestResult = await invoke('workspace_memory_request_review', {
+      workspacePath,
+      id: proposed.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Request activation before target changes.',
+    })
+    const pendingReviewId = (requestResult.structuredContent as any).pendingReviewId
+    await seedStore.review({
+      id: proposed.id,
+      decision: 'reject',
+      reviewer: 'maintainer',
+      rationale: 'Target changed before authorized apply.',
+    })
+    const memoryRowsBeforeApply = await jsonlRows()
+
+    const result = await invoke('workspace_memory_apply_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+      approver: 'host',
+      rationale: 'Attempt stale apply.',
+      approvalToken: 'correct-token',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.structuredContent).toMatchObject({
+      status: 'error',
+      trust: 'workspace_memory_review_request_not_instructions',
+      code: 'WORKSPACE_MEMORY_REVIEW_TARGET_STALE',
+    })
+    expect(seedStore.read(proposed.id)?.status).toBe('rejected')
+    expect(await jsonlRows()).toHaveLength(memoryRowsBeforeApply.length)
+
+    const readResult = await invoke('workspace_memory_read_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+    })
+    expect(readResult.structuredContent).toMatchObject({
+      status: 'ok',
+      request: {
+        id: pendingReviewId,
+        status: 'stale',
+        resolvedBy: 'host',
+        resolutionRationale: 'Attempt stale apply.',
+        errorCode: 'target_status_changed',
+      },
+    })
+  })
+
   it('rejects review requests with a correct token without changing memory status', async () => {
     runtime.config.workspaceMemoryReviewApplyToken = 'correct-token'
     const seedStore = await createSeedStore()
