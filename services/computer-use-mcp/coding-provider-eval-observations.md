@@ -69,13 +69,13 @@ AIRI_EVAL_INCLUDE_AUTO_PROOF_RECOVERY=1 \
 pnpm -F @proj-airi/computer-use-mcp exec tsx ./src/bin/evaluate-coding-entries.ts
 ```
 
-Governor soak, one run per scenario:
+Governor soak, three runs per scenario:
 
 ```bash
 AIRI_AGENT_MODEL=deepseek-chat \
 AIRI_AGENT_BASE_URL=https://api.deepseek.com/v1 \
 AIRI_SOAK_SCENARIO=all \
-AIRI_SOAK_RUNS=1 \
+AIRI_SOAK_RUNS=3 \
 AIRI_SOAK_MAX_STEPS=15 \
 AIRI_SOAK_STEP_TIMEOUT_MS=30000 \
 pnpm -F @proj-airi/computer-use-mcp exec tsx ./src/bin/e2e-coding-governor-xsai-soak.ts
@@ -110,11 +110,11 @@ auto proof recovery: PASS
   autoProofRecoveryValidationAfterDenial: true
   autoProofRecoveryPostCheck.ok: true
 
-governor soak all, runs=1: PASS
-  existing-file: passed
-  fake-completion: passed
-  stalled-read: passed
-  stalled-search: passed
+governor soak all, runs=3: PASS
+  existing-file: 3/3 passed
+  fake-completion: 3/3 passed
+  stalled-read: 3/3 passed
+  stalled-search: 3/3 passed
 ```
 
 Trace locations from the latest run:
@@ -123,8 +123,8 @@ Trace locations from the latest run:
 /tmp/airi-coding-live-analysis-report-20260427-181401.log
 /tmp/airi-coding-live-shell-misuse-20260427-181554.log
 /tmp/airi-coding-live-auto-proof-20260427-181657.log
-/tmp/airi-coding-live-governor-soak-all-20260427-181749.log
-services/computer-use-mcp/.computer-use-mcp/reports/soak/2026-04-27T10-17-50-813Z.jsonl
+/tmp/airi-coding-live-governor-all-r3-after-terminal-denial-stop-20260427-193348.log
+services/computer-use-mcp/.computer-use-mcp/reports/soak/2026-04-27T11-33-49-289Z.jsonl
 ```
 
 ### Failure Mapping

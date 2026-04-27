@@ -141,7 +141,7 @@ Current branch baseline:
 
 ```text
 codex/coding-line-complete-local
-HEAD: faf4fd4b9 fix(coding-runner): recover analysis report archive denial
+HEAD: 27b8233a3 test(computer-use-mcp): stabilize governor soak scenario contracts
 Remote target: 3361559784/airi-preview
 ```
 
@@ -152,7 +152,8 @@ The current DeepSeek live verification matrix is green:
   exercised and recovered through `coding_apply_patch` plus validation
 - auto proof recovery: `passed`, with `missing_mutation_proof` completion
   denial exercised and recovered through patch/read/review/validation
-- governor soak `all`, `runs=1`: all four scenarios passed
+- governor soak `all`, `runs=3`: all four scenarios passed across 12 total
+  scenario-runs
 
 Details and exact commands live in:
 
