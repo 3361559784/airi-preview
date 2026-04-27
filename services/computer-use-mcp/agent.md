@@ -141,7 +141,10 @@ Current branch baseline:
 
 ```text
 codex/coding-line-complete-local
-HEAD: 27b8233a3 test(computer-use-mcp): stabilize governor soak scenario contracts
+Latest pushed status-doc commit before this note:
+  89c6699c2 docs(computer-use-mcp): update coding live eval matrix status
+Runtime/test baseline commit:
+  27b8233a3 test(computer-use-mcp): stabilize governor soak scenario contracts
 Remote target: 3361559784/airi-preview
 ```
 
@@ -162,6 +165,90 @@ Details and exact commands live in:
 Do not change runner runtime from this green matrix alone. If the next goal is
 more confidence, increase live soak breadth first. If a repeated failure appears,
 map it to the documented failure class before opening a narrow runtime follow-up.
+
+## Coding Line Structure And Resume Map
+
+Use this section as the quick restore point for the current coding-line state.
+
+Current state:
+
+- Treat `coding-line-product-stability` as a frozen internal baseline.
+- The baseline is green against DeepSeek, not a universal product guarantee.
+- Reopen the line only for a new live failure, provider matrix expansion, Chika
+  CLI handoff, or a specifically named follow-up.
+- Keep docs/status updates separate from runtime/tests commits.
+
+What this baseline currently proves:
+
+- Existing-file edit loop can read/search, patch, validate, and report
+  completion.
+- Analysis/report can compress context, report completion, and pass the
+  report-only verification gate.
+- Shell misuse recovery can deny dangerous shell mutation and recover through
+  `coding_apply_patch` plus validation.
+- Auto proof recovery can deny missing mutation proof and recover through
+  patch/read/review/validation.
+- Governor soak contracts pass across baseline, shell misuse, auto proof
+  recovery, and fake-completion scenarios.
+
+Primary code map:
+
+- Runner control:
+  - `src/coding-runner/service.ts`
+  - `src/coding-runner/transcript-runtime.ts`
+  - `src/coding-runner/context-policy.ts`
+  - `src/coding-runner/tool-runtime.ts`
+- Guardrails and proof:
+  - `src/coding/primitives.ts`
+  - `src/coding/verification-gate.ts`
+  - `src/coding/shell-command-guard.ts`
+  - `src/state.ts`
+- Task/context memory:
+  - `src/task-memory/`
+  - `src/transcript/retention.ts`
+  - `src/transcript/projector.ts`
+  - `src/archived-context/`
+  - `src/workspace-memory/`
+- Eval entrypoints:
+  - `src/bin/evaluate-coding-entries.ts`
+  - `src/bin/e2e-coding-governor-xsai-soak.ts`
+- Main regression tests:
+  - `src/coding-runner/coding-runner.test.ts`
+  - `src/coding/verification-gate.test.ts`
+  - `src/bin/e2e-coding-governor-xsai-soak.test.ts`
+  - `src/archived-context/archived-context.test.ts`
+  - `src/workspace-memory/workspace-memory.test.ts`
+
+Resume procedure:
+
+1. Run `git status --short` and `git log -5 --oneline`.
+2. Read this file and `coding-provider-eval-observations.md`.
+3. If there is no new repeated failure, do not change runner runtime.
+4. If there is a failure, classify it before opening a narrow follow-up.
+5. Verify with targeted tests first, then package typecheck/full test only after
+   the narrow change is stable.
+
+Failure class map:
+
+- `TEXT_ONLY_FINAL`: report-only correction state machine.
+- `verification_bad_faith` or report-only analysis blocked: report-only
+  verification evidence path.
+- `ARCHIVE_RECALL_DENIED` in analysis/report: analysis/report archive
+  finalization correction. Do not weaken archive latest-search-only discipline.
+- Shell misuse: shell guard plus patch recovery. Do not add shell fallback tools.
+- Missing mutation proof: auto proof recovery and mutation proof/readback path.
+- `TOOL_ADHERENCE_VIOLATION` in soak: check scenario tool-surface contract and
+  guidance first; do not treat unavailable-tool requests as pass.
+
+Stop rules:
+
+- Do not touch archive, workspace memory, task memory, or context policy unless
+  the failure maps there.
+- Do not expand `evidencePins` semantics to carry more product behavior.
+- Do not change runner runtime only because the current matrix is green and a
+  broader soak feels desirable.
+- Do not mix Chika CLI handoff, provider eval docs, and runtime/test fixes in
+  one commit.
 
 ## Terminal Lane v2: What Is Already Landed
 
