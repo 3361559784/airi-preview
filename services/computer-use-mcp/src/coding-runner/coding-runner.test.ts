@@ -1,7 +1,7 @@
 import type { CodingRunnerEventEnvelope } from './types'
 
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -1649,6 +1649,53 @@ describe('codingRunner', () => {
       const readResult = JSON.parse(await readTool.execute({ id: proposed.backend.entry.id }))
       expect(readResult.backend.trust).toBe('governed_workspace_memory_not_instructions')
       expect(readResult.backend.entry.statement).toContain('pnpm filters')
+    }
+    finally {
+      await rm(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects invalid workspace memory proposals without writing memory rows', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const tmpRoot = await mkdtemp(join(tmpdir(), 'coding-runner-workspace-memory-invalid-proposal-'))
+    const memoryPath = join(tmpRoot, 'workspace-memory.jsonl')
+    const workspaceMemoryStore = new WorkspaceMemoryStore(memoryPath, {
+      workspacePath: join(tmpRoot, 'repo'),
+      sourceRunId: 'run-workspace-memory-invalid-proposal',
+    })
+
+    try {
+      await workspaceMemoryStore.init()
+      const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction, {
+        workspaceMemoryStore,
+        events: createCodingRunnerEventEmitter('run-workspace-memory-invalid-proposal'),
+      })
+      const proposeTool = tools.find((toolDef: any) => toolDef.name === 'coding_propose_workspace_memory')
+      expect(proposeTool).toBeDefined()
+
+      const blankStatement = JSON.parse(await proposeTool.execute({
+        kind: 'constraint',
+        statement: ' ',
+        evidence: 'Concrete evidence must not be written without a statement.',
+      }))
+      const blankEvidence = JSON.parse(await proposeTool.execute({
+        kind: 'constraint',
+        statement: 'Invalid proposals must not write workspace memory.',
+        evidence: ' ',
+      }))
+
+      expect(blankStatement).toMatchObject({
+        ok: false,
+        status: 'exception',
+        error: expect.stringContaining('Workspace memory statement is required'),
+      })
+      expect(blankEvidence).toMatchObject({
+        ok: false,
+        status: 'exception',
+        error: expect.stringContaining('Workspace memory evidence is required'),
+      })
+      expect(workspaceMemoryStore.getAll()).toHaveLength(0)
+      await expect(readFile(memoryPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     }
     finally {
       await rm(tmpRoot, { recursive: true, force: true })
