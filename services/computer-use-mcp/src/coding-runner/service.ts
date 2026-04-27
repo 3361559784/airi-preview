@@ -11,7 +11,7 @@ import { generateText } from '@xsai/generate-text'
 
 import { evaluateCodingVerificationGate } from '../coding/verification-gate'
 import { createCodingRunnerEventEmitter } from './events'
-import { buildBudgetExhaustedMemory, buildBudgetPressureMemory, buildReportStatusMemory, buildStepMemory, buildSuccessfulToolEvidenceMemory, buildTaskStartMemory, buildTextOnlyReportRequiredMemory, buildToolFailureMemory, buildVerificationGateFailureMemory, syncCodingRunnerTaskMemory } from './memory'
+import { buildArchiveRecallFinalizationMemory, buildBudgetExhaustedMemory, buildBudgetPressureMemory, buildReportStatusMemory, buildStepMemory, buildSuccessfulToolEvidenceMemory, buildTaskStartMemory, buildTextOnlyReportRequiredMemory, buildToolFailureMemory, buildVerificationGateFailureMemory, syncCodingRunnerTaskMemory } from './memory'
 import { buildXsaiCodingTools } from './tool-runtime'
 import { createTranscriptRuntime, projectForCodingTurn } from './transcript-runtime'
 
@@ -65,6 +65,10 @@ export class CodingRunnerImpl implements CodingRunner {
       workspaceMemoryStore,
     })
     const reportOnlyXsaiTools = xsaiTools.filter((tool: any) => getXsaiToolName(tool) === 'coding_report_status')
+    const analysisArchiveRecallCorrectionXsaiTools = xsaiTools.filter((tool: any) => {
+      const name = getXsaiToolName(tool)
+      return name === 'coding_compress_context' || name === 'coding_report_status'
+    })
 
     // Preflight 1: Review Workspace
     await events.emit('preflight_started', { name: 'coding_review_workspace' })
@@ -136,6 +140,8 @@ export class CodingRunnerImpl implements CodingRunner {
     let lastFailureSummary: string | undefined
     let finalReportCorrectionPending = false
     let finalReportCorrectionAttempts = 0
+    let archiveRecallFinalizationPending = false
+    let archiveRecallFinalizationAttempts = 0
     const turns: CodingRunnerTurnResult[] = []
     const queueFinalReportCorrection = (sourceStep: number, summary: string | undefined): boolean => {
       if (reportOnlyXsaiTools.length === 0 || finalReportCorrectionAttempts >= MAX_FINAL_REPORT_CORRECTION_ATTEMPTS)
@@ -152,19 +158,39 @@ export class CodingRunnerImpl implements CodingRunner {
       })
       return true
     }
+    const queueArchiveRecallFinalization = (sourceStep: number, summary: string | undefined): boolean => {
+      if (taskKind !== 'analysis_report' || analysisArchiveRecallCorrectionXsaiTools.length < 2 || archiveRecallFinalizationAttempts >= 1)
+        return false
+
+      lastFailureSummary = summary
+      archiveRecallFinalizationPending = true
+      syncCodingRunnerTaskMemory({
+        runtime,
+        runId,
+        source: `archive-recall-finalization-${sourceStep}`,
+        sourceIndex: sourceStep * 10 + 5,
+        extraction: buildArchiveRecallFinalizationMemory(summary ?? 'archive recall denied'),
+      })
+      return true
+    }
 
     try {
-      for (let step = 0; step < actualMaxSteps || finalReportCorrectionPending; step++) {
+      for (let step = 0; step < actualMaxSteps || finalReportCorrectionPending || archiveRecallFinalizationPending; step++) {
         const isReportCorrectionStep = finalReportCorrectionPending
+        const isArchiveRecallFinalizationStep = archiveRecallFinalizationPending
         finalReportCorrectionPending = false
+        archiveRecallFinalizationPending = false
         if (isReportCorrectionStep)
           finalReportCorrectionAttempts += 1
+        if (isArchiveRecallFinalizationStep)
+          archiveRecallFinalizationAttempts += 1
         totalSteps = step + 1
         let messages: any[]
+        let newMessages: any[] = []
         const controller = new AbortController()
         const timeoutId = setTimeout(() => controller.abort(new Error('STEP_TIMEOUT')), actualStepTimeoutMs)
         await events.emit('step_started', { stepIndex: step + 1, maxSteps: actualMaxSteps })
-        if (!isReportCorrectionStep) {
+        if (!isReportCorrectionStep && !isArchiveRecallFinalizationStep) {
           syncCodingRunnerTaskMemory({
             runtime,
             runId,
@@ -197,7 +223,13 @@ export class CodingRunnerImpl implements CodingRunner {
             model: this.config.model,
             baseURL: this.config.baseURL,
             apiKey: this.config.apiKey,
-            tools: (isReportCorrectionStep ? reportOnlyXsaiTools : xsaiTools) as any,
+            tools: getToolsForCodingRunnerStep({
+              isReportCorrectionStep,
+              isArchiveRecallFinalizationStep,
+              reportOnlyXsaiTools,
+              analysisArchiveRecallCorrectionXsaiTools,
+              xsaiTools,
+            }) as any,
             system: projection.system,
             messages: projection.messages as any,
             abortSignal: controller.signal as any,
@@ -205,7 +237,7 @@ export class CodingRunnerImpl implements CodingRunner {
           messages = result.messages
 
           // Delta append
-          const newMessages = messages.slice(projectedLength)
+          newMessages = messages.slice(projectedLength)
           for (const msg of newMessages) {
             await transcriptStore.appendRawMessage(msg as any)
           }
@@ -230,6 +262,13 @@ export class CodingRunnerImpl implements CodingRunner {
             exitReason = 'text_only_failure'
             break
           }
+          if (isArchiveRecallFinalizationStep && isUnavailableReportCorrectionToolError(error)) {
+            const summary = clampFailureSummary(error)
+            finalStatus = 'failed'
+            finalError = `ARCHIVE_RECALL_FINALIZATION_FAILED: correction requested unavailable tool.${summary ? ` lastError=${summary}` : ''}`
+            exitReason = 'archive_recall_failure'
+            break
+          }
           throw stepErr
         }
         finally {
@@ -241,6 +280,9 @@ export class CodingRunnerImpl implements CodingRunner {
           const lastContent = typeof lastMsg.content === 'string'
             ? lastMsg.content
             : JSON.stringify(lastMsg.content || '')
+          const failedArchiveRecallCorrectionTool = isArchiveRecallFinalizationStep
+            ? findFailedToolResult(newMessages)
+            : undefined
 
           if (lastMsg.role === 'tool') {
             let toolName = 'unknown'
@@ -271,6 +313,14 @@ export class CodingRunnerImpl implements CodingRunner {
             })
             lastToolName = toolName
 
+            if (failedArchiveRecallCorrectionTool) {
+              lastFailureSummary = failedArchiveRecallCorrectionTool.summary
+              finalStatus = 'failed'
+              finalError = `ARCHIVE_RECALL_FINALIZATION_FAILED: correction tool ${failedArchiveRecallCorrectionTool.toolName} failed.${lastFailureSummary ? ` lastToolError=${lastFailureSummary}` : ''}`
+              exitReason = 'archive_recall_failure'
+              break
+            }
+
             if (isReportCorrectionStep && toolName !== 'coding_report_status') {
               const summary = clampFailureSummary(`report-only correction must call coding_report_status, got ${toolName}.`)
               if (queueFinalReportCorrection(step + 1, summary))
@@ -279,6 +329,14 @@ export class CodingRunnerImpl implements CodingRunner {
               finalStatus = 'failed'
               finalError = `TEXT_ONLY_FINAL: report-only correction must call coding_report_status, got ${toolName}.`
               exitReason = 'text_only_failure'
+              break
+            }
+
+            if (isArchiveRecallFinalizationStep && toolName !== 'coding_report_status') {
+              const summary = clampFailureSummary(`archive recall finalization must end with coding_report_status, got ${toolName}.`)
+              finalStatus = 'failed'
+              finalError = `ARCHIVE_RECALL_FINALIZATION_FAILED: ${summary}`
+              exitReason = 'archive_recall_failure'
               break
             }
 
@@ -298,6 +356,23 @@ export class CodingRunnerImpl implements CodingRunner {
                 finalStatus = 'failed'
                 finalError = `TEXT_ONLY_FINAL: report-only correction failed.${lastFailureSummary ? ` lastToolError=${lastFailureSummary}` : ''}`
                 exitReason = 'text_only_failure'
+                break
+              }
+              if (shouldQueueArchiveRecallFinalization({
+                taskKind,
+                acceptedReportSeen,
+                stepIndex: step,
+                maxSteps: actualMaxSteps,
+                toolName,
+                failureSummary: lastFailureSummary,
+                isCorrectionStep: isReportCorrectionStep || isArchiveRecallFinalizationStep,
+              }) && queueArchiveRecallFinalization(step + 1, lastFailureSummary)) {
+                continue
+              }
+              if (isArchiveRecallFinalizationStep && toolName === 'coding_report_status') {
+                finalStatus = 'failed'
+                finalError = `ARCHIVE_RECALL_FINALIZATION_FAILED: correction report failed.${lastFailureSummary ? ` lastToolError=${lastFailureSummary}` : ''}`
+                exitReason = 'archive_recall_failure'
                 break
               }
             }
@@ -397,6 +472,12 @@ export class CodingRunnerImpl implements CodingRunner {
         // Stop condition: assistant gives text without tool_calls
         if (messages.length > 0 && messages.at(-1).role !== 'tool') {
           const summary = clampFailureSummary(lastFailureSummary ?? String(turns.at(-1)?.rawText ?? 'text-only assistant response'))
+          if (isArchiveRecallFinalizationStep) {
+            finalStatus = 'failed'
+            finalError = `ARCHIVE_RECALL_FINALIZATION_FAILED: correction ended without coding_report_status.${summary ? ` lastAssistant=${summary}` : ''}`
+            exitReason = 'archive_recall_failure'
+            break
+          }
           if (isReportCorrectionStep) {
             if (queueFinalReportCorrection(step + 1, summary))
               continue
@@ -495,11 +576,13 @@ type CodingRunnerExitReason
     | 'step_timeout'
     | 'accepted_report'
     | 'text_only_failure'
+    | 'archive_recall_failure'
     | 'budget_exhausted'
     | 'crash'
 
 const MAX_FAILURE_SUMMARY_CHARS = 500
 const MAX_FINAL_REPORT_CORRECTION_ATTEMPTS = 2
+const ARCHIVE_RECALL_DENIED = 'ARCHIVE_RECALL_DENIED'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -523,6 +606,60 @@ function clampFailureSummary(value: string | undefined): string | undefined {
   if (!trimmed)
     return undefined
   return trimmed.slice(0, MAX_FAILURE_SUMMARY_CHARS)
+}
+
+function getToolsForCodingRunnerStep(params: {
+  isReportCorrectionStep: boolean
+  isArchiveRecallFinalizationStep: boolean
+  reportOnlyXsaiTools: unknown[]
+  analysisArchiveRecallCorrectionXsaiTools: unknown[]
+  xsaiTools: unknown[]
+}) {
+  if (params.isArchiveRecallFinalizationStep)
+    return params.analysisArchiveRecallCorrectionXsaiTools
+
+  if (params.isReportCorrectionStep)
+    return params.reportOnlyXsaiTools
+
+  return params.xsaiTools
+}
+
+function findFailedToolResult(messages: unknown[]): { toolName: string, summary: string | undefined } | undefined {
+  for (const msg of messages) {
+    if (!isRecord(msg) || msg.role !== 'tool' || typeof msg.content !== 'string')
+      continue
+
+    try {
+      const parsed = JSON.parse(msg.content)
+      if (!isRecord(parsed) || parsed.ok !== false)
+        continue
+
+      return {
+        toolName: typeof parsed.tool === 'string' ? parsed.tool : 'unknown',
+        summary: clampFailureSummary(parseToolFailureSummary(parsed) ?? msg.content),
+      }
+    }
+    catch {}
+  }
+
+  return undefined
+}
+
+function shouldQueueArchiveRecallFinalization(params: {
+  taskKind: string
+  acceptedReportSeen: boolean
+  stepIndex: number
+  maxSteps: number
+  toolName: string
+  failureSummary?: string
+  isCorrectionStep: boolean
+}): boolean {
+  return params.taskKind === 'analysis_report'
+    && !params.acceptedReportSeen
+    && !params.isCorrectionStep
+    && params.stepIndex + 1 >= params.maxSteps
+    && params.toolName === 'coding_read_archived_context'
+    && Boolean(params.failureSummary?.includes(ARCHIVE_RECALL_DENIED))
 }
 
 function isUnavailableReportCorrectionToolError(value: string): boolean {

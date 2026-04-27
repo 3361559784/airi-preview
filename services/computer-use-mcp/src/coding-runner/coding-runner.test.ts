@@ -538,6 +538,430 @@ describe('codingRunner', () => {
     }))
   })
 
+  it('recovers analysis/report final archive denial with compress-and-report correction', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const state = createGateReadyState({
+      lastTerminalResult: undefined,
+      coding: {
+        taskKind: 'analysis_report',
+        recentReads: [{ path: 'src/example.ts', range: 'all' }],
+        lastScopedValidationCommand: undefined,
+        lastChangeReview: undefined,
+      },
+    })
+    mockRuntime.stateManager.getState.mockImplementation(() => state)
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_archive_read',
+                function: { name: 'coding_read_archived_context', arguments: '{"artifactId":"0-2-compacted.md"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_archive_read',
+              content: JSON.stringify({
+                tool: 'coding_read_archived_context',
+                args: { artifactId: '0-2-compacted.md' },
+                ok: false,
+                status: 'exception',
+                error: 'ARCHIVE_RECALL_DENIED: artifact was not returned by the latest archive search: 0-2-compacted.md',
+              }),
+            },
+          ],
+        } as any
+      }
+
+      const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
+      expect(toolNames).toHaveLength(2)
+      expect(toolNames).toContain('coding_compress_context')
+      expect(toolNames).toContain('coding_report_status')
+      expect(opts.system).toContain('Do not retry archive search/read')
+
+      state.coding.lastCompressedContext = {
+        goal: 'Explain workspace status after archive recall denial',
+        filesSummary: 'Earlier visible context read src/example.ts.',
+        recentResultSummary: 'Archive recall was denied; no retry is needed.',
+        unresolvedIssues: 'No report blockers found.',
+        nextStepRecommendation: 'Report the analysis result.',
+      }
+      state.coding.lastCodingReport = {
+        status: 'completed',
+        summary: 'Workspace analysis completed from visible context after archive recall denial.',
+        filesTouched: [],
+        commandsRun: [],
+        checks: [],
+        nextStep: 'No code changes required.',
+      }
+
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_compress_context',
+              function: { name: 'coding_compress_context', arguments: '{"goal":"Explain workspace status"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_compress_context',
+            content: JSON.stringify({
+              tool: 'coding_compress_context',
+              args: { goal: 'Explain workspace status' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'ok' },
+            }),
+          },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report_after_archive_denial',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed","filesTouched":[]}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report_after_archive_denial',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: {
+                status: 'completed',
+                summary: 'Workspace analysis completed from visible context after archive recall denial.',
+                filesTouched: [],
+              },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Explain the workspace status',
+      taskKind: 'analysis_report',
+      maxSteps: 1,
+    })
+
+    expect(result.status).toBe('completed')
+    expect(result.totalSteps).toBe(2)
+    expect(callCount).toBe(2)
+    expect(result.turns.map(turn => turn.toolName)).toEqual(['coding_read_archived_context', 'coding_report_status'])
+    expect(result.error).toBeUndefined()
+  })
+
+  it('fails analysis/report archive-denial correction when the model retries archive recall', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const state = createGateReadyState({
+      lastTerminalResult: undefined,
+      coding: {
+        taskKind: 'analysis_report',
+        recentReads: [{ path: 'src/example.ts', range: 'all' }],
+        lastScopedValidationCommand: undefined,
+        lastChangeReview: undefined,
+      },
+    })
+    mockRuntime.stateManager.getState.mockImplementation(() => state)
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_archive_read',
+                function: { name: 'coding_read_archived_context', arguments: '{"artifactId":"0-2-compacted.md"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_archive_read',
+              content: JSON.stringify({
+                tool: 'coding_read_archived_context',
+                args: { artifactId: '0-2-compacted.md' },
+                ok: false,
+                status: 'exception',
+                error: 'ARCHIVE_RECALL_DENIED: artifact was not returned by the latest archive search: 0-2-compacted.md',
+              }),
+            },
+          ],
+        } as any
+      }
+
+      const toolNames = opts.tools.map((tool: any) => tool.name ?? tool.function?.name)
+      expect(toolNames).toEqual(expect.arrayContaining(['coding_compress_context', 'coding_report_status']))
+      throw new Error('Model tried to call unavailable tool "coding_read_archived_context", Available tools: coding_compress_context, coding_report_status.')
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Explain the workspace status',
+      taskKind: 'analysis_report',
+      maxSteps: 1,
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.totalSteps).toBe(2)
+    expect(callCount).toBe(2)
+    expect(result.error).toContain('ARCHIVE_RECALL_FINALIZATION_FAILED')
+    expect(result.error).not.toContain('BUDGET_EXHAUSTED')
+  })
+
+  it('fails analysis/report archive-denial correction when compression fails before report', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const state = createGateReadyState({
+      lastTerminalResult: undefined,
+      coding: {
+        taskKind: 'analysis_report',
+        recentReads: [{ path: 'src/example.ts', range: 'all' }],
+        lastScopedValidationCommand: undefined,
+        lastChangeReview: undefined,
+      },
+    })
+    mockRuntime.stateManager.getState.mockImplementation(() => state)
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_archive_read',
+                function: { name: 'coding_read_archived_context', arguments: '{"artifactId":"0-2-compacted.md"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_archive_read',
+              content: JSON.stringify({
+                tool: 'coding_read_archived_context',
+                args: { artifactId: '0-2-compacted.md' },
+                ok: false,
+                status: 'exception',
+                error: 'ARCHIVE_RECALL_DENIED: artifact was not returned by the latest archive search: 0-2-compacted.md',
+              }),
+            },
+          ],
+        } as any
+      }
+
+      state.coding.lastCodingReport = {
+        status: 'completed',
+        summary: 'Workspace analysis completed even though compression failed.',
+        filesTouched: [],
+        commandsRun: [],
+        checks: [],
+      }
+
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_compress_context',
+              function: { name: 'coding_compress_context', arguments: '{"goal":"Explain workspace status"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_compress_context',
+            content: JSON.stringify({
+              tool: 'coding_compress_context',
+              args: { goal: 'Explain workspace status' },
+              ok: false,
+              status: 'exception',
+              error: 'compression failed',
+            }),
+          },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report_after_failed_compression',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed","filesTouched":[]}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report_after_failed_compression',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: {
+                status: 'completed',
+                summary: 'Workspace analysis completed even though compression failed.',
+                filesTouched: [],
+              },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Explain the workspace status',
+      taskKind: 'analysis_report',
+      maxSteps: 1,
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.totalSteps).toBe(2)
+    expect(callCount).toBe(2)
+    expect(result.error).toContain('ARCHIVE_RECALL_FINALIZATION_FAILED')
+    expect(result.error).toContain('coding_compress_context')
+    expect(result.error).not.toContain('BUDGET_EXHAUSTED')
+  })
+
+  it('fails analysis/report archive-denial correction when the model responds with text only', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const state = createGateReadyState({
+      lastTerminalResult: undefined,
+      coding: {
+        taskKind: 'analysis_report',
+        recentReads: [{ path: 'src/example.ts', range: 'all' }],
+        lastScopedValidationCommand: undefined,
+        lastChangeReview: undefined,
+      },
+    })
+    mockRuntime.stateManager.getState.mockImplementation(() => state)
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_archive_read',
+                function: { name: 'coding_read_archived_context', arguments: '{"artifactId":"0-2-compacted.md"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_archive_read',
+              content: JSON.stringify({
+                tool: 'coding_read_archived_context',
+                args: { artifactId: '0-2-compacted.md' },
+                ok: false,
+                status: 'exception',
+                error: 'ARCHIVE_RECALL_DENIED: artifact was not returned by the latest archive search: 0-2-compacted.md',
+              }),
+            },
+          ],
+        } as any
+      }
+
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: 'I can finish from visible context without more tools.',
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Explain the workspace status',
+      taskKind: 'analysis_report',
+      maxSteps: 1,
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.totalSteps).toBe(2)
+    expect(callCount).toBe(2)
+    expect(result.error).toContain('ARCHIVE_RECALL_FINALIZATION_FAILED')
+    expect(result.error).not.toContain('TEXT_ONLY_FINAL')
+    expect(result.error).not.toContain('BUDGET_EXHAUSTED')
+  })
+
+  it('does not use analysis/report archive-denial correction for edit tasks', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    let callCount = 0
+
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      callCount += 1
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_archive_read',
+              function: { name: 'coding_read_archived_context', arguments: '{"artifactId":"0-2-compacted.md"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_archive_read',
+            content: JSON.stringify({
+              tool: 'coding_read_archived_context',
+              args: { artifactId: '0-2-compacted.md' },
+              ok: false,
+              status: 'exception',
+              error: 'ARCHIVE_RECALL_DENIED: artifact was not returned by the latest archive search: 0-2-compacted.md',
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Edit the workspace',
+      taskKind: 'edit',
+      maxSteps: 1,
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.totalSteps).toBe(1)
+    expect(callCount).toBe(1)
+    expect(result.error).toContain('BUDGET_EXHAUSTED')
+  })
+
   it('does not complete when coding_report_status wrapper result is rejected', async () => {
     const { mockRuntime, mockExecuteAction } = createMockDeps()
     const events: CodingRunnerEventEnvelope[] = []

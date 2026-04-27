@@ -142,6 +142,19 @@ export function buildTextOnlyReportRequiredMemory(summary: string): TaskMemoryEx
   }
 }
 
+export function buildArchiveRecallFinalizationMemory(summary: string): TaskMemoryExtraction {
+  const reason = `Archive recall was denied while finalizing analysis/report: ${summary}`.slice(0, 800)
+  return {
+    status: 'active',
+    currentStep: 'Finalize analysis/report after denied archive recall',
+    recentFailureReason: reason,
+    nextStep: 'Do not retry archive search/read. Synthesize from visible current context and prior read evidence, call coding_compress_context, then call coding_report_status with filesTouched empty.',
+    evidencePins: [
+      formatEvidencePin('archive_recall_denied', summary),
+    ],
+  }
+}
+
 export function buildReportStatusMemory(params: {
   status: 'completed' | 'failed' | 'blocked'
   summary?: string
