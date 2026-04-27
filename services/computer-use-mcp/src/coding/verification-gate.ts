@@ -86,9 +86,34 @@ const GO_TEST_RE = /\bgo test\b/
 const CARGO_TEST_RE = /\bcargo test\b/
 const NODE_CHECK_SCRIPT_RE = /\b(?:node|bun)\s+[\w./-]*check\.(?:mjs|cjs|js|ts)\b/
 const CHECK_SHELL_SCRIPT_RE = /\b[\w./-]*check\.(?:sh|bash)\b/
+const SHELL_CONTROL_OPERATOR_RE = /&&|\|\||[;|<>`]|\$\(/
+const SOURCE_DISCOVERY_PATH_TOKEN_RE = /^(?:-[\w-]+|[./~\w@%+=:,*?-]+)$/
 
 function normalizeCommand(command?: string) {
   return (command || '').trim().replace(WHITESPACE_RE, ' ').toLowerCase()
+}
+
+function isReportOnlySourceDiscoveryProbe(command: string) {
+  if (!command || SHELL_CONTROL_OPERATOR_RE.test(command)) {
+    return false
+  }
+
+  const tokens = command.split(' ').filter(Boolean)
+  const [program, ...args] = tokens
+
+  if (program === 'pwd') {
+    return args.every(arg => /^-[lp]+$/.test(arg))
+  }
+
+  if (program === 'ls') {
+    return args.every(arg => SOURCE_DISCOVERY_PATH_TOKEN_RE.test(arg))
+  }
+
+  if (program === 'cat') {
+    return args.length > 0 && args.every(arg => SOURCE_DISCOVERY_PATH_TOKEN_RE.test(arg))
+  }
+
+  return false
 }
 
 function commandTargetsReviewedFiles(command: string, fileHints: string[]) {
@@ -256,7 +281,8 @@ export function evaluateCodingVerificationGate(params: {
     terminalEvidence.terminalCommand || review?.validationCommand,
   )
 
-  if (OBVIOUS_NOOP_RE.test(candidateCommand)) {
+  const isAllowedSourceDiscovery = reportOnlyCompletion && isReportOnlySourceDiscoveryProbe(candidateCommand)
+  if (OBVIOUS_NOOP_RE.test(candidateCommand) && !isAllowedSourceDiscovery) {
     triggers.add('verification_bad_faith')
   }
   else if (hasValidationCommandMismatch({

@@ -191,6 +191,34 @@ describe('coding verification gate', () => {
     expect(decision.verificationEvidenceSummary.matchedTriggers).not.toContain('no_validation_run')
   })
 
+  it('passes report-only completion with structured analysis evidence after directory probe commands', () => {
+    // ROOT CAUSE:
+    //
+    // DeepSeek analysis/report live eval read files, compressed context, and
+    // reported completion without touching files, but a later `ls` probe was
+    // treated as `verification_bad_faith`.
+    //
+    // For analysis/report-only tasks, directory probes are source discovery
+    // context, not mutation validation. The gate should rely on report-only
+    // runtime evidence instead of requiring `node check.js`-style validation.
+    const decision = evaluateCodingVerificationGate({
+      codingState: createReportOnlyCodingState(),
+      workflowKind: 'coding_agentic_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'ls -la /tmp/project',
+        terminalExitCode: 0,
+      },
+    })
+
+    expect(decision.decision).toBe('pass')
+    expect(decision.workflowOutcome).toBe('completed')
+    expect(decision.reasonCode).toBe('gate_pass')
+    expect(decision.verificationEvidenceSummary.isReportOnlyCompletion).toBe(true)
+    expect(decision.verificationEvidenceSummary.reportOnlyEvidence).toContain('compressed_context')
+    expect(decision.verificationEvidenceSummary.matchedTriggers).not.toContain('verification_bad_faith')
+  })
+
   it('does not let report-only evidence complete while plan work is still pending', () => {
     const decision = evaluateCodingVerificationGate({
       codingState: createReportOnlyCodingState({
@@ -514,6 +542,111 @@ describe('coding verification gate', () => {
       terminalEvidence: {
         hasTerminalResult: true,
         terminalCommand: 'printf "PASS"',
+        terminalExitCode: 0,
+      },
+    })
+    expect(decision.decision).toBe('needs_follow_up')
+    expect(decision.reasonCode).toBe('verification_bad_faith')
+  })
+
+  it('passes report-only completion with pwd source discovery probe', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createReportOnlyCodingState(),
+      workflowKind: 'coding_agentic_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'pwd',
+        terminalExitCode: 0,
+      },
+    })
+
+    expect(decision.decision).toBe('pass')
+    expect(decision.reasonCode).toBe('gate_pass')
+    expect(decision.verificationEvidenceSummary.matchedTriggers).not.toContain('verification_bad_faith')
+  })
+
+  it('passes report-only completion with cat source discovery probe', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createReportOnlyCodingState(),
+      workflowKind: 'coding_agentic_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'cat src/example.ts',
+        terminalExitCode: 0,
+      },
+    })
+
+    expect(decision.decision).toBe('pass')
+    expect(decision.reasonCode).toBe('gate_pass')
+    expect(decision.verificationEvidenceSummary.matchedTriggers).not.toContain('verification_bad_faith')
+  })
+
+  it('rejects report-only completion when source discovery chains another command', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createReportOnlyCodingState(),
+      workflowKind: 'coding_agentic_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'ls -la && node -e "console.log(1)"',
+        terminalExitCode: 0,
+      },
+    })
+
+    expect(decision.decision).toBe('needs_follow_up')
+    expect(decision.reasonCode).toBe('verification_bad_faith')
+  })
+
+  it('rejects report-only completion when cat redirects output', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createReportOnlyCodingState(),
+      workflowKind: 'coding_agentic_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'cat src/example.ts > copied.ts',
+        terminalExitCode: 0,
+      },
+    })
+
+    expect(decision.decision).toBe('needs_follow_up')
+    expect(decision.reasonCode).toBe('verification_bad_faith')
+  })
+
+  it('rejects report-only completion with echo shortcut', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createReportOnlyCodingState(),
+      workflowKind: 'coding_agentic_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'echo "not verifiable"',
+        terminalExitCode: 0,
+      },
+    })
+    expect(decision.decision).toBe('needs_follow_up')
+    expect(decision.reasonCode).toBe('verification_bad_faith')
+  })
+
+  it('rejects report-only completion with inline node shortcut', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createReportOnlyCodingState(),
+      workflowKind: 'coding_agentic_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'node -e "console.log(1)"',
+        terminalExitCode: 0,
+      },
+    })
+
+    expect(decision.decision).toBe('needs_follow_up')
+    expect(decision.reasonCode).toBe('verification_bad_faith')
+  })
+
+  it('rejects ls in edit-task', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createCodingState(),
+      workflowKind: 'coding_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'ls -la',
         terminalExitCode: 0,
       },
     })
