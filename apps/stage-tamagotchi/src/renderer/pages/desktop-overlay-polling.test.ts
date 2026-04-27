@@ -5,11 +5,14 @@ import type { OverlayState } from './desktop-overlay-polling'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  createOverlayPollHeartbeat,
   createEmptyOverlayState,
   createOverlayMcpToolCaller,
   createOverlayPollController,
   extractOverlayState,
   extractRunStateFromResult,
+  formatOverlayPollHeartbeat,
+  isOverlayPollHeartbeatEnabled,
   MCP_TOOL_NAME,
 } from './desktop-overlay-polling'
 
@@ -132,6 +135,57 @@ describe('extractRunStateFromResult', () => {
   })
 })
 
+describe('overlay poll heartbeat', () => {
+  it('is disabled by default when no heartbeat query parameter is present', () => {
+    expect(isOverlayPollHeartbeatEnabled({ hash: '#/desktop-overlay', search: '' })).toBe(false)
+  })
+
+  it('is enabled by the overlay heartbeat query parameter', () => {
+    expect(isOverlayPollHeartbeatEnabled({ hash: '#/desktop-overlay?pollHeartbeat=1', search: '' })).toBe(true)
+    expect(isOverlayPollHeartbeatEnabled({ hash: '#/desktop-overlay', search: '?pollHeartbeat=1' })).toBe(true)
+  })
+
+  it('creates a small heartbeat only for snapshot-bearing state', () => {
+    expect(createOverlayPollHeartbeat(createEmptyOverlayState())).toBeUndefined()
+
+    const heartbeat = createOverlayPollHeartbeat({
+      ...createEmptyOverlayState(),
+      hasSnapshot: true,
+      snapshotId: 'dg_heartbeat',
+      candidates: [
+        { id: 't_0', source: 'chrome_dom', role: 'button', label: 'OK', bounds: { x: 1, y: 2, width: 3, height: 4 }, confidence: 0.9 },
+      ],
+      pointerIntent: {
+        snappedPoint: { x: 10, y: 20 },
+        source: 'chrome_dom',
+        confidence: 0.9,
+        mode: 'preview',
+      },
+    })
+
+    expect(heartbeat).toEqual({
+      snapshotId: 'dg_heartbeat',
+      candidateCount: 1,
+      hasPointerIntent: true,
+    })
+  })
+
+  it('formats a bounded marker without serializing full runState payloads', () => {
+    const marker = formatOverlayPollHeartbeat({
+      snapshotId: 'dg_heartbeat',
+      candidateCount: 2,
+      hasPointerIntent: false,
+    })
+
+    expect(marker).toContain('[AIRI_DESKTOP_OVERLAY_POLL_HEARTBEAT]')
+    expect(marker).toContain('snapshotId=dg_heartbeat')
+    expect(marker).toContain('candidates=2')
+    expect(marker).toContain('pointerIntent=no')
+    expect(marker).not.toContain('lastGroundingSnapshot')
+    expect(marker).not.toContain('targetCandidates')
+  })
+})
+
 // ---------------------------------------------------------------------------
 // createEmptyOverlayState
 // ---------------------------------------------------------------------------
@@ -225,6 +279,83 @@ describe('createOverlayPollController', () => {
     expect(received[0].hasSnapshot).toBe(false)
     expect(received[1].hasSnapshot).toBe(true)
     expect(received[1].candidates[0].id).toBe('t_0')
+
+    controller.stop()
+  })
+
+  it('emits heartbeat only after a successful poll with snapshot state', async () => {
+    vi.useFakeTimers()
+
+    const mockResult: McpCallToolResult = {
+      structuredContent: {
+        runState: {
+          lastGroundingSnapshot: {
+            snapshotId: 'dg_poll_heartbeat',
+            targetCandidates: [
+              { id: 't_0', source: 'chrome_dom', role: 'button', label: 'OK', bounds: { x: 10, y: 20, width: 50, height: 25 }, confidence: 0.9 },
+            ],
+            staleFlags: { screenshot: false, ax: false, chromeSemantic: false },
+          },
+          lastPointerIntent: {
+            snappedPoint: { x: 20, y: 30 },
+            source: 'chrome_dom',
+            confidence: 0.9,
+            mode: 'preview',
+          },
+        },
+      },
+    }
+    const heartbeats: Array<{ snapshotId: string, candidateCount: number, hasPointerIntent: boolean }> = []
+
+    const controller = createOverlayPollController({
+      callTool: vi.fn<(name: string) => Promise<McpCallToolResult>>().mockResolvedValue(mockResult),
+      getReadiness: vi.fn().mockResolvedValue({ state: 'ready' }),
+      onState: () => {},
+      onHeartbeat: heartbeat => heartbeats.push(heartbeat),
+      intervalMs: 100,
+      fallbackIntervalMs: 200,
+    })
+
+    controller.start()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(heartbeats).toEqual([{
+      snapshotId: 'dg_poll_heartbeat',
+      candidateCount: 1,
+      hasPointerIntent: true,
+    }])
+
+    controller.stop()
+  })
+
+  it('does not emit heartbeat for failed or snapshotless polls', async () => {
+    vi.useFakeTimers()
+
+    const callTool = vi.fn<(name: string) => Promise<McpCallToolResult>>()
+      .mockResolvedValueOnce({
+        isError: true,
+        content: [{ type: 'text', text: 'MCP failed' }],
+      })
+      .mockResolvedValueOnce({
+        structuredContent: { runState: {} },
+      })
+    const heartbeats: Array<{ snapshotId: string, candidateCount: number, hasPointerIntent: boolean }> = []
+
+    const controller = createOverlayPollController({
+      callTool,
+      getReadiness: vi.fn().mockResolvedValue({ state: 'ready' }),
+      onState: () => {},
+      onHeartbeat: heartbeat => heartbeats.push(heartbeat),
+      intervalMs: 100,
+      fallbackIntervalMs: 200,
+    })
+
+    controller.start()
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(200)
+
+    expect(callTool).toHaveBeenCalledTimes(2)
+    expect(heartbeats).toEqual([])
 
     controller.stop()
   })

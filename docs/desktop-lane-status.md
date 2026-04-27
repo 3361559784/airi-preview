@@ -97,14 +97,16 @@ Latest narrow validation on 2026-04-27:
 pnpm -F @proj-airi/computer-use-mcp exec vitest run src/desktop-session.test.ts src/chrome-session-manager.test.ts src/server/register-chrome-session.test.ts src/server/register-desktop-grounding.test.ts src/server/register-desktop-grounding-tools.test.ts
 pnpm -F @proj-airi/stage-tamagotchi exec vitest run src/renderer/pages/desktop-overlay-polling.test.ts src/renderer/pages/desktop-overlay-coordinates.test.ts
 pnpm -F @proj-airi/computer-use-mcp smoke:desktop-v3
+pnpm -F @proj-airi/stage-tamagotchi smoke:desktop-overlay-live-window
 ```
 
 Result:
 
 ```text
 computer-use-mcp: 5 files passed, 76 tests passed
-stage-tamagotchi overlay: 2 files passed, 35 tests passed
+stage-tamagotchi overlay: 2 files passed, 42 tests passed
 desktop v3 smoke: PASS
+desktop overlay live-window smoke: PASS
 ```
 
 This validates the unit/integration contract around session state, Chrome
@@ -115,8 +117,28 @@ desktop_click_target -> desktop_get_state`.
 
 The smoke selected the controlled page's AX button target and verified
 post-click pointer/candidate state. It does not prove Chrome semantic DOM click
-routing, the Electron overlay renderer in a live window, or user-input
-isolation.
+routing or user-input isolation.
+
+The overlay live-window smoke command is:
+
+```bash
+pnpm -F @proj-airi/stage-tamagotchi smoke:desktop-overlay-live-window
+```
+
+It launches stage-tamagotchi with
+`AIRI_DESKTOP_OVERLAY=1` and
+`AIRI_DESKTOP_OVERLAY_POLL_HEARTBEAT=1`, writes an isolated temporary
+`mcp.json`, drives the desktop v3 tool chain through the overlay window's own
+Eventa/MCP channel, and waits for an overlay heartbeat marker:
+
+```text
+[AIRI_DESKTOP_OVERLAY_POLL_HEARTBEAT] snapshotId=<id> candidates=<n> pointerIntent=<yes|no>
+```
+
+Passing means the real Electron overlay renderer can poll
+`computer_use::desktop_get_state` repeatedly after grounding/pointer state has
+been produced. The heartbeat is env-gated and does not include full `runState`
+payloads.
 
 ## What Is No Longer A Current Blocker
 
@@ -147,18 +169,20 @@ These are the real desktop v3 gaps now:
    - It does not prove Chrome semantic DOM routing, live overlay-window
      rendering, or user-input isolation.
 
-2. Overlay lifecycle is still not product-proven in a real window context.
-   - The code has preload-order and polling timeout protections.
-   - Tests cover helper behavior.
-   - A live Electron overlay run still needs to prove the renderer can poll MCP
-     state repeatedly without hanging or stealing focus.
+2. Overlay lifecycle has a local live-window polling smoke command, but still
+   is not product-supported.
+   - The smoke proves the real overlay renderer can poll MCP state through its
+     dedicated Eventa/MCP path.
+   - It still does not prove user-input isolation beyond the current
+     click-through window contract.
+   - It still does not prove Chrome semantic DOM routing.
 
 3. Support matrix should record desktop v3 smoke coverage but still should not
    call desktop v3 product-supported.
    - Keep desktop-native claims conservative.
    - Do not promote support level based on one MCP smoke alone.
-   - Product support still needs live overlay-window proof and the next
-     input-isolation runtime contract.
+   - Product support still needs Chrome semantic DOM routing coverage and the
+     next input-isolation runtime contract.
 
 4. Old desktop branches need recut, not repair.
    - Continuing stale branches risks dragging reversed translations, removed
@@ -166,24 +190,22 @@ These are the real desktop v3 gaps now:
 
 ## Next Knife
 
-Recommended next PR:
+Current PR target:
 
 ```text
-docs(computer-use-mcp): mark desktop v3 smoke coverage in support matrix
+test(stage-tamagotchi): prove desktop overlay live-window polling
 ```
 
 Scope:
 
-- Add the desktop v3 Chrome grounding smoke to `src/support-matrix.ts`.
-- Keep the level at `covered`, not `product-supported`.
-- Record that the existing live smoke proves MCP grounding state, not Chrome
-  semantic DOM click routing or live overlay-window rendering.
-- Do not redesign overlay visuals or browser-DOM policy.
+- Add env-gated overlay polling heartbeat markers.
+- Add a local macOS smoke for real overlay-window MCP polling.
+- Keep desktop v3 at `covered`, not `product-supported`.
 
-Follow-up after that, only if the smoke is green:
+Recommended next follow-up after the smoke is green:
 
 ```text
-test(stage-tamagotchi): prove desktop overlay live-window polling
+test(computer-use-mcp): prove Chrome semantic DOM click routing
 ```
 
 ## Stop Rules
