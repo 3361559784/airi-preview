@@ -1,5 +1,9 @@
 import type { TranscriptBlock } from '../transcript/types'
 
+export const ARCHIVE_RECALL_DEFAULT_SEARCH_LIMIT = 5
+export const ARCHIVE_RECALL_MAX_SEARCH_LIMIT = 10
+export const ARCHIVE_RECALL_MAX_READ_CHARS = 12000
+
 /**
  * Archived Context — types for the archive layer.
  *
@@ -7,7 +11,8 @@ import type { TranscriptBlock } from '../transcript/types'
  * the local filesystem. They represent transcript blocks that were removed
  * from the active prompt (compacted or dropped) and may be recalled later.
  *
- * V1 scope: write-only, no retrieval, no promotion to workspace memory.
+ * Current scope: current-run recallable archive, no cross-run retrieval, no
+ * automatic prompt replay, and no promotion to workspace memory.
  */
 
 // ---------------------------------------------------------------------------
@@ -96,6 +101,21 @@ export interface ArchiveSearchHit {
   summary: string
   /** Query-matched excerpt from the artifact body. */
   excerpt: string
+  /** Trust boundary label for recalled archive content. */
+  evidence: ArchiveRecallEvidence
+}
+
+export interface ArchiveRecallEvidence {
+  /** Archive recall is historical context, not executable instruction text. */
+  label: 'historical_evidence_not_instructions'
+  /** Search/read are bounded to the active coding run. */
+  scope: 'current_run'
+  /** Source recorded in artifact frontmatter. */
+  source: ArchiveArtifactFrontmatter['source']
+  /** Confidence recorded in artifact frontmatter. */
+  confidence: ArchiveArtifactFrontmatter['confidence']
+  /** Whether a human verified the artifact content. */
+  humanVerified: boolean
 }
 
 // ---------------------------------------------------------------------------

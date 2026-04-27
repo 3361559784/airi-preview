@@ -1,5 +1,5 @@
 /**
- * Archive Context Store — file-backed write-only store for archive artifacts.
+ * Archive Context Store — file-backed current-run store for archive artifacts.
  *
  * Layout:
  *   {archiveRoot}/run/{run_id}/{start}-{end}-{reason}.md
@@ -16,12 +16,11 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { archiveArtifactFilename, buildArchiveArtifact, serializeArchiveArtifact } from './serializer'
-import { buildDeduplicationKey } from './types'
+import { ARCHIVE_RECALL_DEFAULT_SEARCH_LIMIT, ARCHIVE_RECALL_MAX_SEARCH_LIMIT, buildDeduplicationKey } from './types'
 
 const ARCHIVE_ARTIFACT_FILENAME_RE = /^\d+-\d+-(?:compacted|dropped)\.md$/
 const ARCHIVE_ARTIFACT_FILENAME_PARTS_RE = /^(\d+)-(\d+)-(?:compacted|dropped)\.md$/
 const WHITESPACE_RE = /\s+/g
-
 export class ArchiveContextStore {
   private readonly seenKeys = new Set<ArchiveDeduplicationKey>()
   private initialized = false
@@ -103,11 +102,13 @@ export class ArchiveContextStore {
    * Search current-run archive artifacts with deterministic substring matching.
    * V1 is intentionally simple: no vector index, no cross-run retrieval.
    */
-  async search(runId: string, query: string, limit = 5): Promise<ArchiveSearchHit[]> {
+  async search(runId: string, query: string, limit = ARCHIVE_RECALL_DEFAULT_SEARCH_LIMIT): Promise<ArchiveSearchHit[]> {
     const normalizedQuery = query.trim().toLowerCase()
     if (!normalizedQuery)
       return []
-    if (limit <= 0)
+
+    const boundedLimit = normalizeSearchLimit(limit)
+    if (boundedLimit <= 0)
       return []
 
     const runDir = join(this.archiveRoot, 'run', runId)
@@ -135,9 +136,10 @@ export class ArchiveContextStore {
         reason: reasonFromFilename(filename),
         summary: extractSection(content, 'Summary').slice(0, 500),
         excerpt: excerptAround(content, index),
+        evidence: extractRecallEvidence(content),
       })
 
-      if (hits.length >= limit)
+      if (hits.length >= boundedLimit)
         break
     }
 
@@ -186,4 +188,39 @@ function excerptAround(content: string, index: number): string {
   const start = Math.max(0, index - 120)
   const end = Math.min(content.length, index + 240)
   return content.slice(start, end).replace(WHITESPACE_RE, ' ').trim()
+}
+
+function normalizeSearchLimit(limit: number): number {
+  if (!Number.isFinite(limit))
+    return ARCHIVE_RECALL_DEFAULT_SEARCH_LIMIT
+  return Math.min(ARCHIVE_RECALL_MAX_SEARCH_LIMIT, Math.max(0, Math.floor(limit)))
+}
+
+function extractRecallEvidence(content: string): ArchiveSearchHit['evidence'] {
+  const frontmatter = extractFrontmatter(content)
+  return {
+    label: 'historical_evidence_not_instructions',
+    scope: 'current_run',
+    source: 'transcript_projection',
+    confidence: normalizeConfidence(extractFrontmatterValue(frontmatter, 'confidence')),
+    humanVerified: extractFrontmatterValue(frontmatter, 'human_verified') === 'true',
+  }
+}
+
+function extractFrontmatter(content: string): string {
+  if (!content.startsWith('---\n'))
+    return ''
+  const end = content.indexOf('\n---', 4)
+  if (end < 0)
+    return ''
+  return content.slice(4, end)
+}
+
+function extractFrontmatterValue(frontmatter: string, key: string): string | undefined {
+  const match = new RegExp(`^${key}:\\s*(.+)$`, 'm').exec(frontmatter)
+  return match?.[1]?.trim()
+}
+
+function normalizeConfidence(value: string | undefined): ArchiveSearchHit['evidence']['confidence'] {
+  return value === 'medium' || value === 'high' ? value : 'low'
 }

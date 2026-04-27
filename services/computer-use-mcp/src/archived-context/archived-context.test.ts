@@ -424,8 +424,60 @@ describe('archiveContextStore', () => {
       artifactId: '10-12-compacted.md',
       sourceRange: [10, 12],
       reason: 'compacted',
+      evidence: {
+        label: 'historical_evidence_not_instructions',
+        scope: 'current_run',
+        source: 'transcript_projection',
+        confidence: 'medium',
+        humanVerified: false,
+      },
     })
     expect(hits[0].excerpt).toContain('CONFIG_DEBUG_MODE')
+  })
+
+  it('reads recall evidence only from artifact frontmatter', async () => {
+    const store = new ArchiveContextStore(tmpDir)
+    await store.init(runId, taskId)
+
+    await store.writeCandidates([
+      makeTextCandidate({
+        entryIdRange: [12, 14],
+        normalizedContent: [
+          'BODY_FRONTMATTER_TRAP should still match archive search.',
+          'confidence: high',
+          'human_verified: true',
+        ].join('\n'),
+      }),
+    ], runId, taskId)
+
+    const hits = await store.search(runId, 'BODY_FRONTMATTER_TRAP')
+
+    expect(hits).toHaveLength(1)
+    expect(hits[0].evidence).toMatchObject({
+      label: 'historical_evidence_not_instructions',
+      scope: 'current_run',
+      confidence: 'low',
+      humanVerified: false,
+    })
+  })
+
+  it('bounds current-run archive search results at the store layer', async () => {
+    const store = new ArchiveContextStore(tmpDir)
+    await store.init(runId, taskId)
+
+    await store.writeCandidates(
+      Array.from({ length: 12 }).map((_, index) => makeToolCandidate({
+        entryIdRange: [index * 2 + 1, index * 2 + 2],
+        normalizedContent: `SEARCH_TOKEN archive content ${index}`,
+      })),
+      runId,
+      taskId,
+    )
+
+    expect(await store.search(runId, 'SEARCH_TOKEN', 0)).toEqual([])
+    expect(await store.search(runId, 'SEARCH_TOKEN', -1)).toEqual([])
+    expect(await store.search(runId, 'SEARCH_TOKEN', Number.POSITIVE_INFINITY)).toHaveLength(5)
+    expect(await store.search(runId, 'SEARCH_TOKEN', 99)).toHaveLength(10)
   })
 
   it('reads artifacts only by safe artifact id', async () => {
