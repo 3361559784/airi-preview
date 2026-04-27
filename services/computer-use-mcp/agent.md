@@ -1,6 +1,14 @@
-# computer-use-mcp Agent Notes
+# computer-use-mcp Current Handoff Notes
 
 Scope: `services/computer-use-mcp/**`
+
+This file is a current workstream handoff snapshot and package-local operating
+guide. It is not a global AIRI rule file and should not be copied into the
+monorepo root as a blanket instruction.
+
+Do not treat this file as the only truth source. Before relying on any
+current-status claim here, verify against implementation, tests,
+`src/support-matrix.ts`, and package scripts.
 
 ## Mission
 
@@ -43,11 +51,12 @@ Default worker posture:
 - Use Spark subagents aggressively for fast read-only repo exploration, test
   discovery, and diff review.
 - Use Copilot CLI aggressively for external read-only plan/review passes.
-- Treat Copilot `gpt-5-mini` and `gpt-4.1` as cheap default workers for
-  high-frequency low-risk scans, sanity checks, and alternate test ideas.
-- Use Copilot `gpt-5.4-mini high` for normal external worker review.
-- Use Copilot `gpt-5.3-codex high` only for harder code-review or implementation
-  reasoning, not routine scans.
+- Prefer the cheapest reliable Copilot model for high-frequency low-risk scans,
+  sanity checks, and alternate test ideas.
+- Use stronger Copilot-side models for harder code review, implementation
+  reasoning, or candidate patch review, not routine scans.
+- If model names change, preserve the role split: cheap/fast worker for triage,
+  stronger coding model for hard review, GPT-5.5 as final controller.
 - Use Gemini CLI for broad context review, independent risk checks, and
   second-opinion architecture/readability passes.
 - If Gemini quota or latency is bad, fall back to Copilot workers.
@@ -77,6 +86,12 @@ Hard boundaries:
 
 ## Current Status Snapshot
 
+Last reviewed: 2026-04-27
+Workstream: terminal-lane-v2
+
+If this date is old, treat this section as stale until revalidated against code,
+tests, package scripts, and `src/support-matrix.ts`.
+
 Updated for the current terminal-lane-v2 workstream.
 
 The important truth is:
@@ -88,7 +103,9 @@ The important truth is:
 - The desktop shell now distinguishes `pty_session` from `terminal_and_apps`.
 - AIRI chat self-acquire is now part of the strict release gate set, so PTY mainline support is no longer intentionally held back.
 
-Do not rely on compressed chat summaries to resume this work. Use this file as the handoff source of truth and update it when terminal-lane behavior changes materially.
+Do not rely on compressed chat summaries to resume this work. Use this file as
+the current handoff index and update it when terminal-lane behavior changes
+materially.
 
 ## Terminal Lane v2: What Is Already Landed
 
