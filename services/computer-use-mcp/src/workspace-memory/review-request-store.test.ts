@@ -193,6 +193,71 @@ describe('workspaceMemoryReviewRequestStore', () => {
     })
   })
 
+  it('filters requests by normalized workspace key when stores share a JSONL file', async () => {
+    const workspaceA = join(tmpRoot, 'repo-a')
+    const workspaceB = join(tmpRoot, 'repo-b')
+    const sharedRequestPath = join(tmpRoot, 'workspace-memory-review-requests', 'shared.jsonl')
+    const memoryStoreA = new WorkspaceMemoryStore(join(tmpRoot, 'workspace-memory', 'repo-a.jsonl'), {
+      workspacePath: workspaceA,
+      sourceRunId: 'run-a',
+    })
+    const memoryStoreB = new WorkspaceMemoryStore(join(tmpRoot, 'workspace-memory', 'repo-b.jsonl'), {
+      workspacePath: workspaceB,
+      sourceRunId: 'run-b',
+    })
+    const requestStoreA = new WorkspaceMemoryReviewRequestStore(sharedRequestPath, { workspacePath: workspaceA })
+    const requestStoreB = new WorkspaceMemoryReviewRequestStore(sharedRequestPath, { workspacePath: workspaceB })
+    await memoryStoreA.init()
+    await memoryStoreB.init()
+    await requestStoreA.init()
+    await requestStoreB.init()
+
+    const proposedA = await memoryStoreA.propose({
+      kind: 'fact',
+      statement: 'Repo A memory request stays scoped to repo A.',
+      evidence: 'Repo A evidence.',
+    })
+    const proposedB = await memoryStoreB.propose({
+      kind: 'fact',
+      statement: 'Repo B memory request stays scoped to repo B.',
+      evidence: 'Repo B evidence.',
+    })
+    const requestA = await requestStoreA.request({
+      memoryId: proposedA.id,
+      decision: 'activate',
+      requester: 'maintainer-a',
+      rationale: 'Review repo A memory.',
+    }, memoryStoreA.read(proposedA.id))
+    const requestB = await requestStoreB.request({
+      memoryId: proposedB.id,
+      decision: 'reject',
+      requester: 'maintainer-b',
+      rationale: 'Review repo B memory.',
+    }, memoryStoreB.read(proposedB.id))
+
+    const reloadedA = new WorkspaceMemoryReviewRequestStore(sharedRequestPath, {
+      workspacePath: `${workspaceA}/../repo-a`,
+    })
+    const reloadedB = new WorkspaceMemoryReviewRequestStore(sharedRequestPath, { workspacePath: workspaceB })
+    await reloadedA.init()
+    await reloadedB.init()
+
+    expect(workspaceKeyFromPath(`${workspaceA}/../repo-a`)).toBe(workspaceKeyFromPath(workspaceA))
+    expect(await jsonlRows(sharedRequestPath)).toHaveLength(2)
+    expect(reloadedA.list()).toEqual([expect.objectContaining({
+      id: requestA.id,
+      memoryId: proposedA.id,
+      workspaceKey: workspaceKeyFromPath(workspaceA),
+    })])
+    expect(reloadedA.read(requestB.id)).toBeUndefined()
+    expect(reloadedB.list()).toEqual([expect.objectContaining({
+      id: requestB.id,
+      memoryId: proposedB.id,
+      workspaceKey: workspaceKeyFromPath(workspaceB),
+    })])
+    expect(reloadedB.read(requestA.id)).toBeUndefined()
+  })
+
   it('applies pending activate requests and marks them applied', async () => {
     const memoryStore = await createMemoryStore()
     const requestStore = await createRequestStore()
