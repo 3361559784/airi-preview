@@ -53,4 +53,14 @@ describe('support matrix', () => {
     const ps = getProductSupported()
     expect(ps.length).toBeGreaterThanOrEqual(4)
   })
+
+  it('records desktop v3 smoke as covered without product-supported promotion', () => {
+    const entry = supportMatrix.find(item => item.id === 'desktop_v3_chrome_grounding')
+
+    expect(entry).toBeDefined()
+    expect(entry!.lane).toBe('desktop-native')
+    expect(entry!.level).toBe('covered')
+    expect(entry!.smokeCommand).toBe('pnpm -F @proj-airi/computer-use-mcp smoke:desktop-v3')
+    expect(entry!.unitTests).toContain('src/bin/smoke-chrome-grounding.test.ts')
+  })
 })

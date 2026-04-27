@@ -96,6 +96,7 @@ Latest narrow validation on 2026-04-27:
 ```bash
 pnpm -F @proj-airi/computer-use-mcp exec vitest run src/desktop-session.test.ts src/chrome-session-manager.test.ts src/server/register-chrome-session.test.ts src/server/register-desktop-grounding.test.ts src/server/register-desktop-grounding-tools.test.ts
 pnpm -F @proj-airi/stage-tamagotchi exec vitest run src/renderer/pages/desktop-overlay-polling.test.ts src/renderer/pages/desktop-overlay-coordinates.test.ts
+pnpm -F @proj-airi/computer-use-mcp smoke:desktop-v3
 ```
 
 Result:
@@ -103,11 +104,19 @@ Result:
 ```text
 computer-use-mcp: 5 files passed, 76 tests passed
 stage-tamagotchi overlay: 2 files passed, 35 tests passed
+desktop v3 smoke: PASS
 ```
 
 This validates the unit/integration contract around session state, Chrome
 session tools, grounding state, target click registration, and overlay polling
-helpers. It is not a live desktop smoke.
+helpers. The live smoke validates the MCP desktop v3 chain:
+`desktop_ensure_chrome -> desktop_observe -> desktop_get_state ->
+desktop_click_target -> desktop_get_state`.
+
+The smoke selected the controlled page's AX button target and verified
+post-click pointer/candidate state. It does not prove Chrome semantic DOM click
+routing, the Electron overlay renderer in a live window, or user-input
+isolation.
 
 ## What Is No Longer A Current Blocker
 
@@ -130,11 +139,13 @@ Do not reopen those as fresh blockers unless a live run proves regression.
 
 These are the real desktop v3 gaps now:
 
-1. Live desktop v3 smoke is missing.
-   - Current evidence is mostly unit/integration tests.
-   - There is no narrow green smoke proving:
+1. Live desktop v3 MCP smoke exists, but is still baseline coverage.
+   - Current smoke proves:
      `desktop_ensure_chrome -> desktop_observe -> desktop_click_target ->
-     desktop_get_state/overlay state`.
+     desktop_get_state/overlay-consumable state`.
+   - It should be treated as `covered`, not product-supported.
+   - It does not prove Chrome semantic DOM routing, live overlay-window
+     rendering, or user-input isolation.
 
 2. Overlay lifecycle is still not product-proven in a real window context.
    - The code has preload-order and polling timeout protections.
@@ -142,10 +153,12 @@ These are the real desktop v3 gaps now:
    - A live Electron overlay run still needs to prove the renderer can poll MCP
      state repeatedly without hanging or stealing focus.
 
-3. Support matrix still should not call desktop v3 product-supported until the
-   live smoke exists.
+3. Support matrix should record desktop v3 smoke coverage but still should not
+   call desktop v3 product-supported.
    - Keep desktop-native claims conservative.
-   - Do not promote support level based on unit tests alone.
+   - Do not promote support level based on one MCP smoke alone.
+   - Product support still needs live overlay-window proof and the next
+     input-isolation runtime contract.
 
 4. Old desktop branches need recut, not repair.
    - Continuing stale branches risks dragging reversed translations, removed
@@ -156,27 +169,21 @@ These are the real desktop v3 gaps now:
 Recommended next PR:
 
 ```text
-test(desktop): add desktop v3 live smoke baseline
+docs(computer-use-mcp): mark desktop v3 smoke coverage in support matrix
 ```
 
 Scope:
 
-- Add or wire one narrow smoke script that proves the v3 desktop chain without
-  claiming the whole product is finished.
-- The expected chain should be:
-  1. ensure or join an agent Chrome session
-  2. call `desktop_observe`
-  3. confirm `desktop_get_state` exposes grounding snapshot and pointer state
-  4. execute one safe target-click path in dry-run or controlled local mode
-  5. confirm overlay-polling contract can read the same state shape
-- Keep the smoke deterministic enough for local verification.
-- Do not redesign overlay visuals.
-- Do not change browser-DOM policy unless the smoke exposes a concrete failure.
+- Add the desktop v3 Chrome grounding smoke to `src/support-matrix.ts`.
+- Keep the level at `covered`, not `product-supported`.
+- Record that the existing live smoke proves MCP grounding state, not Chrome
+  semantic DOM click routing or live overlay-window rendering.
+- Do not redesign overlay visuals or browser-DOM policy.
 
 Follow-up after that, only if the smoke is green:
 
 ```text
-docs(computer-use-mcp): mark desktop v3 smoke coverage in support matrix
+test(stage-tamagotchi): prove desktop overlay live-window polling
 ```
 
 ## Stop Rules
