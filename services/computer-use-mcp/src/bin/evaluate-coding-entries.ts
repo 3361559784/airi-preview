@@ -25,6 +25,9 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
  */
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
+import type { CodingLiveFailureReplayRow } from '../coding-runner/live-failure-replay'
+import type { EvalTranscriptToolResult } from './coding-eval-replay'
+
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
@@ -38,6 +41,7 @@ import { createRuntimeCoordinator } from '../server/runtime-coordinator'
 import { RunStateManager } from '../state'
 import { TaskMemoryManager } from '../task-memory/manager'
 import { createDisplayInfo, createLocalExecutionTarget, createTerminalState, createTestConfig } from '../test-fixtures'
+import { buildCodingEvalReplayRow, inferEvalProviderLabel } from './coding-eval-replay'
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<CallToolResult>
 type EvalScenarioStatus = 'passed' | 'not_exercised' | 'failed'
@@ -52,16 +56,6 @@ interface EvalActionTraceEntry {
   isError?: boolean
   structuredContent?: unknown
   errorText?: string
-}
-
-interface EvalTranscriptToolResult {
-  entryId: number
-  tool?: string
-  args?: Record<string, unknown>
-  ok?: boolean
-  status?: string
-  error?: string
-  backend?: any
 }
 
 const SHELL_GUARD_CODES = [
@@ -645,6 +639,32 @@ function summarizeAutoProofRecovery(params: {
   }
 }
 
+function appendReplayRow(
+  rows: CodingLiveFailureReplayRow[],
+  params: {
+    result?: CallToolResult
+    workspace: string
+    label: string
+    source: {
+      provider?: string
+      model?: string
+    }
+  },
+) {
+  const row = buildCodingEvalReplayRow({
+    result: params.result,
+    transcriptTools: readTranscriptToolResults(params.workspace),
+    source: {
+      label: params.label,
+      provider: params.source.provider,
+      model: params.source.model,
+    },
+  })
+
+  if (row)
+    rows.push(row)
+}
+
 // Scaffold
 async function runCompare() {
   if (!env.AIRI_AGENT_API_KEY) {
@@ -653,6 +673,11 @@ async function runCompare() {
   }
 
   console.log('Evaluation scenario scaffold running...')
+  const replayRows: CodingLiveFailureReplayRow[] = []
+  const replaySourceBase = {
+    provider: inferEvalProviderLabel(env.AIRI_AGENT_BASE_URL),
+    model: env.AIRI_AGENT_MODEL ?? 'gpt-4o-mini',
+  }
 
   // Run Scenario A: deterministic agentic loop
   const workspaceA = await createWorkspaceFixture()
@@ -699,6 +724,12 @@ async function runCompare() {
   catch (error) {
     console.error('Coding Runner crashed:', error)
   }
+  appendReplayRow(replayRows, {
+    result: resultB,
+    workspace: workspaceB,
+    label: 'baseline-edit',
+    source: replaySourceBase,
+  })
 
   const includeAnalysisReport = env.AIRI_EVAL_INCLUDE_ANALYSIS_REPORT === '1'
   let resultC: CallToolResult | undefined
@@ -729,6 +760,12 @@ async function runCompare() {
     catch (error) {
       console.error('Analysis Report Coding Runner crashed:', error)
     }
+    appendReplayRow(replayRows, {
+      result: resultC,
+      workspace: workspaceC,
+      label: 'analysis-report',
+      source: replaySourceBase,
+    })
   }
 
   const includeShellMisuse = env.AIRI_EVAL_INCLUDE_SHELL_MISUSE === '1'
@@ -763,6 +800,12 @@ async function runCompare() {
       result: resultD,
       trace: shellMisuseTrace,
       workspace: workspaceD,
+    })
+    appendReplayRow(replayRows, {
+      result: resultD,
+      workspace: workspaceD,
+      label: 'shell-misuse',
+      source: replaySourceBase,
     })
   }
 
@@ -831,6 +874,12 @@ async function runCompare() {
       workspace: workspaceE,
       allowTranscriptFallbackWithoutTranscriptDenial: true,
     })
+    appendReplayRow(replayRows, {
+      result: resultE,
+      workspace: workspaceE,
+      label: 'auto-proof-recovery',
+      source: replaySourceBase,
+    })
   }
 
   console.log('\n=======================================')
@@ -846,6 +895,7 @@ async function runCompare() {
       isError: resultB?.isError,
       structuredContent: resultB?.structuredContent,
     },
+    codingLiveFailureReplayRows: replayRows,
     ...(includeAnalysisReport
       ? {
           analysisReportRunner: {
