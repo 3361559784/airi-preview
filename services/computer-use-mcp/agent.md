@@ -134,28 +134,30 @@ materially.
 
 ## Coding Line Current Baseline
 
-Last reviewed: 2026-04-27
+Last reviewed: 2026-04-28
 Workstream: coding-line-product-stability
 
 Current branch baseline:
 
 ```text
 codex/coding-line-complete-local
+Latest runtime fix commit:
+  48555e197 fix(coding-runner): ignore stale source probes after validation evidence
 Latest status-doc commit before this note:
-  343f8a894 docs(computer-use-mcp): document coding line resume map
-Runtime/test baseline commit:
-  27b8233a3 test(computer-use-mcp): stabilize governor soak scenario contracts
+  d7c3f6793 docs(computer-use-mcp): record coding governor soak r5 pass
 Remote target: 3361559784/airi-preview
 ```
 
 The current DeepSeek live verification matrix is green:
 
+- combined live matrix: default runner, analysis/report, shell misuse recovery,
+  and auto proof recovery all `completed`
 - analysis/report: `completed`
 - shell misuse recovery: `passed`, with `dangerous_file_mutation` guard denial
   exercised and recovered through `coding_apply_patch` plus validation
 - auto proof recovery: `passed`, with `missing_mutation_proof` completion
   denial exercised and recovered through patch/read/review/validation
-- governor soak `all`, `runs=5`: all four scenarios passed across 20 total
+- governor soak `all`, `runs=10`: all four scenarios passed across 40 total
   scenario-runs, with no tool-adherence violations and no unavailable-tool
   requests
 
