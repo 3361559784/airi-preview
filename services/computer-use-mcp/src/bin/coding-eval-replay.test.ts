@@ -69,8 +69,9 @@ describe('coding eval replay adapter', () => {
       source: { label: 'baseline-edit' },
       result: makeToolResult({
         runId: 'run-eval-2',
-        status: 'completed',
+        status: 'failed',
         totalSteps: 4,
+        lastError: 'BUDGET_EXHAUSTED after terminal cwd detour',
       }),
       transcriptTools: [
         {
@@ -105,6 +106,53 @@ describe('coding eval replay adapter', () => {
         stderrPreview: 'cat: index.ts: No such file or directory',
       },
     ])
+  })
+
+  it('does not build failure replay rows for completed runner results', () => {
+    const row = buildCodingEvalReplayRow({
+      source: { label: 'baseline-edit' },
+      result: makeToolResult({
+        runId: 'run-eval-completed',
+        status: 'completed',
+        totalSteps: 12,
+      }),
+      transcriptTools: [
+        {
+          entryId: 1,
+          tool: 'coding_search_text',
+          args: { query: 'DEBUG_MODE', targetPath: '.' },
+          ok: true,
+          status: 'ok',
+          backend: { total: 8 },
+        },
+        {
+          entryId: 2,
+          tool: 'terminal_exec',
+          args: { command: 'node check.js', cwd: '/tmp/workspace' },
+          ok: true,
+          status: 'executed',
+          backend: {
+            command: 'node check.js',
+            effectiveCwd: '/tmp/workspace',
+            exitCode: 0,
+            timedOut: false,
+            stdout: 'Check Passed',
+          },
+        },
+      ],
+    })
+
+    expect(row).toBeUndefined()
+    expect(summarizeCodingEvalReplayRows(row ? [row] : [])).toEqual({
+      totalRows: 0,
+      completedRows: 0,
+      failedRows: 0,
+      providerObservationRows: 0,
+      runtimeFollowUpRows: 0,
+      deterministicReplayRows: 0,
+      unknownRows: 0,
+      entries: [],
+    })
   })
 
   it('maps outside-workspace validation detours from live eval reports', () => {

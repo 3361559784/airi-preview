@@ -65,6 +65,9 @@ export function buildCodingEvalReplayRow(input: BuildCodingEvalReplayRowInput) {
   if (!runId || !status || totalSteps === undefined)
     return undefined
 
+  if (status === 'completed')
+    return undefined
+
   const runnerResult: CodingRunnerResult = {
     runId,
     status,
@@ -80,15 +83,17 @@ export function buildCodingEvalReplayRow(input: BuildCodingEvalReplayRowInput) {
 }
 
 export function summarizeCodingEvalReplayRows(rows: readonly CodingLiveFailureReplayRow[]): CodingEvalReplaySummary {
+  const failureRows = rows.filter(row => row.status !== 'completed')
+
   return {
-    totalRows: rows.length,
-    completedRows: rows.filter(row => row.status === 'completed').length,
-    failedRows: rows.filter(row => row.status === 'failed' || row.status === 'crash' || row.status === 'timeout').length,
-    providerObservationRows: rows.filter(row => row.disposition === 'provider_observation_only').length,
-    runtimeFollowUpRows: rows.filter(row => row.disposition === 'runtime_follow_up_if_repeated').length,
-    deterministicReplayRows: rows.filter(row => row.disposition === 'deterministic_replay_first').length,
-    unknownRows: rows.filter(row => row.failureClass === 'unknown').length,
-    entries: rows.map(rowToSummaryEntry),
+    totalRows: failureRows.length,
+    completedRows: 0,
+    failedRows: failureRows.filter(row => row.status === 'failed' || row.status === 'crash' || row.status === 'timeout').length,
+    providerObservationRows: failureRows.filter(row => row.disposition === 'provider_observation_only').length,
+    runtimeFollowUpRows: failureRows.filter(row => row.disposition === 'runtime_follow_up_if_repeated').length,
+    deterministicReplayRows: failureRows.filter(row => row.disposition === 'deterministic_replay_first').length,
+    unknownRows: failureRows.filter(row => row.failureClass === 'unknown').length,
+    entries: failureRows.map(rowToSummaryEntry),
   }
 }
 
