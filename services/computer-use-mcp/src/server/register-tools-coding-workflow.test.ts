@@ -82,6 +82,7 @@ function createGateAwareExecuteAction(
     terminalSequence?: ScriptedTerminalState[]
     reviewSequence?: ScriptedReviewState[]
     diagnosisSequence?: ScriptedDiagnosisState[]
+    validationBaselineWorkspacePath?: string
     onTerminalExec?: (snapshot: {
       index: number
       hasVerificationNudge: boolean
@@ -108,7 +109,7 @@ function createGateAwareExecuteAction(
     if (action.kind === 'coding_capture_validation_baseline') {
       runtime.stateManager.updateCodingState({
         validationBaseline: {
-          workspacePath: coding?.workspacePath || '/tmp/project',
+          workspacePath: options?.validationBaselineWorkspacePath || coding?.workspacePath || '/tmp/project',
           baselineDirtyFiles: [],
           baselineDiffSummary: '',
           baselineFailingChecks: [],
@@ -767,6 +768,59 @@ describe('registerComputerUseTools: workflow_coding_loop', () => {
     expect(structured.status).toBe('completed')
     expect(executeAction.mock.calls.filter(call => call[0].kind === 'terminal_exec')).toHaveLength(2)
     expect(executeAction.mock.calls.filter(call => call[0].kind === 'coding_review_changes')).toHaveLength(2)
+  })
+
+  it('coding_loop bounded recheck uses the workflow workspace when validation baseline points at a temporary worktree', async () => {
+    const executeAction = createGateAwareExecuteAction(runtime, {
+      validationBaselineWorkspacePath: '/tmp/project/.airi-agentic-worktree',
+      terminalSequence: [
+        { applyToState: false },
+        { applyToState: true, exitCode: 0 },
+      ],
+      reviewSequence: [
+        {
+          status: 'needs_follow_up',
+          detectedRisks: ['no_validation_run'],
+          unresolvedIssues: [],
+          scopedValidationCommand: 'pnpm exec eslint "src/example.ts"',
+        },
+        {
+          status: 'ready_for_next_file',
+          detectedRisks: [],
+          unresolvedIssues: [],
+          scopedValidationCommand: 'pnpm exec eslint "src/example.ts"',
+        },
+      ],
+    })
+    const { server, invoke } = createMockServer()
+
+    registerComputerUseTools({
+      server,
+      runtime,
+      executeAction,
+      enableTestTools: false,
+    })
+
+    const result = await invoke('workflow_coding_loop', {
+      workspacePath: '/tmp/project',
+      taskGoal: 'Trigger bounded recheck from workflow workspace',
+      targetFile: 'src/example.ts',
+      patchOld: 'a',
+      patchNew: 'b',
+      testCommand: 'auto',
+      autoApprove: true,
+    })
+
+    const recheckCall = executeAction.mock.calls
+      .filter(call => call[0].kind === 'terminal_exec')
+      .at(1)
+    expect((result.structuredContent as Record<string, any>).status).toBe('completed')
+    expect(recheckCall?.[0]).toMatchObject({
+      kind: 'terminal_exec',
+      input: {
+        cwd: '/tmp/project',
+      },
+    })
   })
 
   it('generates verification nudge before bounded recheck execution', async () => {

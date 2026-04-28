@@ -910,9 +910,7 @@ async function runBoundedCodingRunnerVerificationRecheck(params: {
     }
 
     const currentFilePath = codingState.lastTargetSelection?.selectedFile
-    const recheckCwd = codingState.validationBaseline?.workspacePath
-      || codingState.workspacePath
-      || params.workspacePath
+    const recheckCwd = params.workspacePath
 
     if (params.runValidation) {
       const validationResult = await params.executeAction({

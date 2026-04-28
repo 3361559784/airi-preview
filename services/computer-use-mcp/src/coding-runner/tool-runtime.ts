@@ -4,6 +4,8 @@ import type { ComputerUseServerRuntime } from '../server/runtime'
 import type { WorkspaceMemoryStore } from '../workspace-memory/store'
 import type { CodingRunnerEventEmitter } from './events'
 
+import path from 'node:path'
+
 import { errorMessageFrom } from '@moeru/std'
 import { tool as xsaiTool } from '@xsai/tool'
 import { z } from 'zod'
@@ -146,6 +148,64 @@ function normalizeNullableToolInput(input: unknown): unknown {
   return input
 }
 
+function normalizeCodingRunnerToolInput(name: string, input: unknown, runtime: ComputerUseServerRuntime): unknown {
+  if (name !== 'terminal_exec' || !input || typeof input !== 'object' || Array.isArray(input))
+    return input
+
+  const codingState = runtime.stateManager.getState().coding
+  const workspacePath = codingState?.workspacePath || codingState?.validationBaseline?.workspacePath
+  if (!workspacePath)
+    return input
+
+  const inputRecord = input as Record<string, unknown>
+
+  return {
+    ...inputRecord,
+    cwd: resolveCodingTerminalCwd({
+      cwd: typeof inputRecord.cwd === 'string'
+        ? inputRecord.cwd
+        : undefined,
+      workspacePath,
+      sourceWorkspacePath: codingState?.validationBaseline?.workspaceMetadata?.sourceWorkspacePath,
+    }),
+  }
+}
+
+function resolveCodingTerminalCwd(params: {
+  cwd?: string
+  workspacePath: string
+  sourceWorkspacePath?: string
+}): string {
+  const workspacePath = path.resolve(params.workspacePath)
+  const cwd = params.cwd?.trim()
+  if (!cwd || cwd === '.')
+    return workspacePath
+
+  if (path.isAbsolute(cwd)) {
+    const absoluteCwd = path.resolve(cwd)
+    if (isSameOrInsidePath(absoluteCwd, workspacePath))
+      return absoluteCwd
+
+    if (params.sourceWorkspacePath) {
+      const sourceWorkspacePath = path.resolve(params.sourceWorkspacePath)
+      if (isSameOrInsidePath(absoluteCwd, sourceWorkspacePath))
+        return path.resolve(workspacePath, path.relative(sourceWorkspacePath, absoluteCwd))
+    }
+
+    throw new Error(`CODING_TERMINAL_CWD_DENIED: cwd ${cwd} is outside coding workspace ${workspacePath}`)
+  }
+
+  const resolvedCwd = path.resolve(workspacePath, cwd)
+  if (!isSameOrInsidePath(resolvedCwd, workspacePath))
+    throw new Error(`CODING_TERMINAL_CWD_DENIED: cwd ${cwd} is outside coding workspace ${workspacePath}`)
+
+  return resolvedCwd
+}
+
+function isSameOrInsidePath(candidate: string, root: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}${path.sep}`)
+}
+
 async function createCodingXsaiTool(definition: Parameters<typeof xsaiTool>[0]) {
   const created = await xsaiTool(definition)
   if (created?.function?.parameters)
@@ -184,13 +244,14 @@ export async function buildXsaiCodingTools(
         description,
         parameters: z.object(shape),
         execute: async (input: any) => {
-          const normalizedInput = normalizeNullableToolInput(input) as any
-          await options.events?.emit('tool_call_started', {
-            toolName: name,
-            argsSummary: summarizeArgs(normalizedInput),
-          })
-
+          let normalizedInput: any
           try {
+            normalizedInput = normalizeCodingRunnerToolInput(name, normalizeNullableToolInput(input), runtime) as any
+            await options.events?.emit('tool_call_started', {
+              toolName: name,
+              argsSummary: summarizeArgs(normalizedInput),
+            })
+
             const mcpResult = await handler(normalizedInput)
             const textContent = (mcpResult.content || []).map((c: any) => c.text).join('\n')
             const modelVisibleText = sanitizeCodingToolTextForModel(textContent)
@@ -216,6 +277,7 @@ export async function buildXsaiCodingTools(
             })
           }
           catch (err: unknown) {
+            normalizedInput ??= normalizeNullableToolInput(input)
             const msg = errorMessageFrom(err) || String(err)
             await options.events?.emit('tool_call_completed', {
               toolName: name,

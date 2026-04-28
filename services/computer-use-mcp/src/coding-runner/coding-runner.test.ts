@@ -482,6 +482,60 @@ describe('codingRunner', () => {
     expect(events.filter(event => event.kind === 'verification_gate_evaluated').map(event => (event.payload as any).gateDecision)).toEqual(['recheck_once', 'pass'])
   })
 
+  it('uses the run workspace for bounded verification recheck when baseline points at a temporary worktree', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const state = createGateReadyState({
+      lastTerminalResult: undefined,
+      coding: {
+        workspacePath: '/tmp/baseline-worktree',
+        validationBaseline: {
+          workspacePath: '/tmp/baseline-worktree',
+          capturedAt: '2026-04-29T00:00:00.000Z',
+          baselineDirtyFiles: [],
+          workspaceMetadata: {
+            sourceWorkspacePath: '/test',
+            worktreePath: '/tmp/baseline-worktree',
+          },
+        },
+      },
+    })
+    mockRuntime.stateManager.getState.mockImplementation(() => state)
+    mockExecuteAction.mockImplementation(async (action: any) => {
+      if (action.kind === 'terminal_exec') {
+        state.lastTerminalResult = {
+          command: action.input.command,
+          effectiveCwd: action.input.cwd,
+          exitCode: 0,
+          stdout: 'ok',
+          stderr: '',
+          durationMs: 10,
+          timedOut: false,
+        }
+      }
+      return { isError: false, content: [], structuredContent: { status: 'executed', action: action.kind } }
+    })
+    mockGenerateCompletedReport('done after recheck')
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Complete with recheck from run workspace',
+    })
+
+    expect(result.status).toBe('completed')
+    expect(mockExecuteAction).toHaveBeenCalledWith(
+      {
+        kind: 'terminal_exec',
+        input: {
+          command: 'auto',
+          cwd: '/test',
+          timeoutMs: 60_000,
+        },
+      },
+      'workflow_coding_runner_verification_recheck_terminal_exec',
+    )
+  })
+
   it('fails when the bounded verification recheck does not produce passing evidence', async () => {
     const { mockRuntime, mockExecuteAction } = createMockDeps()
     const state = createGateReadyState({ lastTerminalResult: undefined })
@@ -2007,6 +2061,136 @@ describe('codingRunner', () => {
     expect(result.args).toEqual({ filePath: 'index.ts' })
   })
 
+  it('normalizes coding-runner terminal cwd to the active workspace before invoking MCP handlers', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager.updateCodingState({
+      workspacePath: '/tmp/fixture-worktree',
+      validationBaseline: {
+        workspacePath: '/tmp/fixture-worktree',
+        capturedAt: '2026-04-29T00:00:00.000Z',
+        baselineDirtyFiles: [],
+        workspaceMetadata: {
+          sourceWorkspacePath: '/Users/liuziheng/airi-coding-line',
+          worktreePath: '/tmp/fixture-worktree',
+        },
+      },
+    })
+    mockExecuteAction.mockImplementation(async (action: any) => {
+      if (action?.kind === 'terminal_exec') {
+        return {
+          isError: false,
+          content: [{ type: 'text', text: `Terminal command completed with cwd=${action.input.cwd}.` }],
+          structuredContent: {
+            status: 'ok',
+            backendResult: {
+              command: action.input.command,
+              effectiveCwd: action.input.cwd,
+              exitCode: 0,
+            },
+          },
+        }
+      }
+      return { isError: false, content: [] }
+    })
+
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction)
+    const terminalExec = tools.find((toolDef: any) => toolDef.name === 'terminal_exec')
+    expect(terminalExec).toBeDefined()
+
+    const result = JSON.parse(await terminalExec.execute({ command: 'node check.js', cwd: '.' }))
+
+    expect(mockExecuteAction).toHaveBeenCalledWith({
+      kind: 'terminal_exec',
+      input: {
+        command: 'node check.js',
+        cwd: '/tmp/fixture-worktree',
+      },
+    }, 'terminal_exec')
+    expect(result.args).toMatchObject({
+      command: 'node check.js',
+      cwd: '/tmp/fixture-worktree',
+    })
+    expect(result.backend).toMatchObject({
+      effectiveCwd: '/tmp/fixture-worktree',
+    })
+  })
+
+  it('maps source-workspace terminal cwd to the active temporary worktree', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager.updateCodingState({
+      workspacePath: '/tmp/fixture-worktree',
+      validationBaseline: {
+        workspacePath: '/tmp/fixture-worktree',
+        capturedAt: '2026-04-29T00:00:00.000Z',
+        baselineDirtyFiles: [],
+        workspaceMetadata: {
+          sourceWorkspacePath: '/Users/liuziheng/airi-coding-line',
+          worktreePath: '/tmp/fixture-worktree',
+        },
+      },
+    })
+    mockExecuteAction.mockResolvedValue({
+      isError: false,
+      content: [{ type: 'text', text: 'Terminal command completed.' }],
+      structuredContent: {
+        status: 'ok',
+        backendResult: {
+          effectiveCwd: '/tmp/fixture-worktree/services/computer-use-mcp',
+          exitCode: 0,
+        },
+      },
+    })
+
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction)
+    const terminalExec = tools.find((toolDef: any) => toolDef.name === 'terminal_exec')
+    expect(terminalExec).toBeDefined()
+
+    await terminalExec.execute({
+      command: 'node check.js',
+      cwd: '/Users/liuziheng/airi-coding-line/services/computer-use-mcp',
+    })
+
+    expect(mockExecuteAction).toHaveBeenCalledWith({
+      kind: 'terminal_exec',
+      input: {
+        command: 'node check.js',
+        cwd: '/tmp/fixture-worktree/services/computer-use-mcp',
+      },
+    }, 'terminal_exec')
+  })
+
+  it('rejects coding-runner terminal cwd outside the active workspace before execution', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager.updateCodingState({
+      workspacePath: '/tmp/fixture-worktree',
+      validationBaseline: {
+        workspacePath: '/tmp/fixture-worktree',
+        capturedAt: '2026-04-29T00:00:00.000Z',
+        baselineDirtyFiles: [],
+      },
+    })
+
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction)
+    const terminalExec = tools.find((toolDef: any) => toolDef.name === 'terminal_exec')
+    expect(terminalExec).toBeDefined()
+
+    const result = JSON.parse(await terminalExec.execute({
+      command: 'node check.js',
+      cwd: '/Users/liuziheng/airi-coding-line',
+    }))
+
+    expect(result).toMatchObject({
+      tool: 'terminal_exec',
+      ok: false,
+      status: 'exception',
+      error: expect.stringContaining('CODING_TERMINAL_CWD_DENIED'),
+    })
+    expect(mockExecuteAction).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'terminal_exec' }),
+      'terminal_exec',
+    )
+  })
+
   it('strips cross-lane advisory from model-visible xsai tool summaries without mutating backend', async () => {
     const { mockRuntime, mockExecuteAction } = createMockDeps()
     mockRuntime.stateManager.updateInferredLane('coding')
@@ -2070,7 +2254,7 @@ describe('codingRunner', () => {
             status: 'error',
             backendResult: {
               exitCode: 1,
-              effectiveCwd: '/wrong',
+              effectiveCwd: '/test/wrong',
             },
           },
         }
@@ -2086,7 +2270,7 @@ describe('codingRunner', () => {
     const terminalExec = tools.find((toolDef: any) => toolDef.name === 'terminal_exec')
     expect(terminalExec).toBeDefined()
 
-    const result = JSON.parse(await terminalExec.execute({ command: 'cat index.ts', cwd: '/wrong' }))
+    const result = JSON.parse(await terminalExec.execute({ command: 'cat index.ts', cwd: '/test/wrong' }))
 
     expect(result.ok).toBe(false)
     expect(result.status).toBe('error')
@@ -2097,7 +2281,7 @@ describe('codingRunner', () => {
     expect(result.error).not.toContain('Consider using a handoff')
     expect(result.backend).toMatchObject({
       exitCode: 1,
-      effectiveCwd: '/wrong',
+      effectiveCwd: '/test/wrong',
     })
 
     const completion = events.find(event => event.kind === 'tool_call_completed')

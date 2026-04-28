@@ -1587,9 +1587,7 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
     const primitives = new CodingPrimitives(runtime)
     const scopedValidation = await primitives.resolveScopedValidationCommand(currentFilePath)
 
-    const recheckCwd = codingState.validationBaseline?.workspacePath
-      || codingState.workspacePath
-      || params.workspacePath
+    const recheckCwd = params.workspacePath
 
     const validationResult = await executeAction({
       kind: 'terminal_exec',
