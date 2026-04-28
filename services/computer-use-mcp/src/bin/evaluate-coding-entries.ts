@@ -22,6 +22,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
  *   AIRI_AGENT_API_KEY   — live model API key
  *   AIRI_AGENT_MODEL     — (optional) model name, defaults to gpt-4o-mini
  *   AIRI_AGENT_BASE_URL  — (optional) base URL
+ *   AIRI_EVAL_REPORT_PATH — (optional) write the final JSON report to this path
  */
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
@@ -42,6 +43,7 @@ import { RunStateManager } from '../state'
 import { TaskMemoryManager } from '../task-memory/manager'
 import { createDisplayInfo, createLocalExecutionTarget, createTerminalState, createTestConfig } from '../test-fixtures'
 import { buildCodingEvalReplayRow, inferEvalProviderLabel, summarizeCodingEvalReplayRows } from './coding-eval-replay'
+import { persistCodingEvalReport } from './coding-eval-report'
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<CallToolResult>
 type EvalScenarioStatus = 'passed' | 'not_exercised' | 'failed'
@@ -934,6 +936,12 @@ async function runCompare() {
   }
 
   console.log(JSON.stringify(report, null, 2))
+  const persistedReport = await persistCodingEvalReport(report, {
+    reportPath: env.AIRI_EVAL_REPORT_PATH,
+  })
+  if (persistedReport.wrote) {
+    console.log(`\n[REPORT] Coding eval report written to ${persistedReport.path}`)
+  }
 
   // Evaluation Assertions
   const aStatus = (resultA?.structuredContent as any)?.status
