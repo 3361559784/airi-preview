@@ -1,6 +1,6 @@
 # Coding Provider Eval Observations
 
-Last reviewed: 2026-04-27
+Last reviewed: 2026-04-28
 
 This document records live-provider observations for the coding runner. It is a
 handoff note, not a runtime contract and not a claim that the coding line is
@@ -24,7 +24,11 @@ It does not define:
 
 ## Latest DeepSeek Live Matrix
 
-Last run: 2026-04-27
+Last matrix update: 2026-04-28
+
+The governor soak was refreshed on 2026-04-28 with five runs per scenario.
+The analysis/report, shell misuse recovery, and auto proof recovery entries
+below remain from the 2026-04-27 matrix run.
 
 Provider settings:
 
@@ -69,13 +73,13 @@ AIRI_EVAL_INCLUDE_AUTO_PROOF_RECOVERY=1 \
 pnpm -F @proj-airi/computer-use-mcp exec tsx ./src/bin/evaluate-coding-entries.ts
 ```
 
-Governor soak, three runs per scenario:
+Governor soak, five runs per scenario:
 
 ```bash
 AIRI_AGENT_MODEL=deepseek-chat \
 AIRI_AGENT_BASE_URL=https://api.deepseek.com/v1 \
 AIRI_SOAK_SCENARIO=all \
-AIRI_SOAK_RUNS=3 \
+AIRI_SOAK_RUNS=5 \
 AIRI_SOAK_MAX_STEPS=15 \
 AIRI_SOAK_STEP_TIMEOUT_MS=30000 \
 pnpm -F @proj-airi/computer-use-mcp exec tsx ./src/bin/e2e-coding-governor-xsai-soak.ts
@@ -110,11 +114,13 @@ auto proof recovery: PASS
   autoProofRecoveryValidationAfterDenial: true
   autoProofRecoveryPostCheck.ok: true
 
-governor soak all, runs=3: PASS
-  existing-file: 3/3 passed
-  fake-completion: 3/3 passed
-  stalled-read: 3/3 passed
-  stalled-search: 3/3 passed
+governor soak all, runs=5: PASS
+  existing-file: 5/5 passed
+  fake-completion: 5/5 passed
+  stalled-read: 5/5 passed
+  stalled-search: 5/5 passed
+  toolAdherenceViolation: none
+  requestedUnavailableTool: none
 ```
 
 Trace locations from the latest run:
@@ -123,8 +129,8 @@ Trace locations from the latest run:
 /tmp/airi-coding-live-analysis-report-20260427-181401.log
 /tmp/airi-coding-live-shell-misuse-20260427-181554.log
 /tmp/airi-coding-live-auto-proof-20260427-181657.log
-/tmp/airi-coding-live-governor-all-r3-after-terminal-denial-stop-20260427-193348.log
-services/computer-use-mcp/.computer-use-mcp/reports/soak/2026-04-27T11-33-49-289Z.jsonl
+/tmp/airi-coding-live-governor-all-r5-20260428-185039.log
+services/computer-use-mcp/.computer-use-mcp/reports/soak/2026-04-28T10-50-40-588Z.jsonl
 ```
 
 ### Failure Mapping

@@ -111,7 +111,7 @@ Hard boundaries:
 
 ## Current Status Snapshot
 
-Last reviewed: 2026-04-27
+Last reviewed: 2026-04-28
 Workstream: terminal-lane-v2
 
 If this date is old, treat this section as stale until revalidated against code,
@@ -141,8 +141,8 @@ Current branch baseline:
 
 ```text
 codex/coding-line-complete-local
-Latest pushed status-doc commit before this note:
-  89c6699c2 docs(computer-use-mcp): update coding live eval matrix status
+Latest status-doc commit before this note:
+  343f8a894 docs(computer-use-mcp): document coding line resume map
 Runtime/test baseline commit:
   27b8233a3 test(computer-use-mcp): stabilize governor soak scenario contracts
 Remote target: 3361559784/airi-preview
@@ -155,8 +155,9 @@ The current DeepSeek live verification matrix is green:
   exercised and recovered through `coding_apply_patch` plus validation
 - auto proof recovery: `passed`, with `missing_mutation_proof` completion
   denial exercised and recovered through patch/read/review/validation
-- governor soak `all`, `runs=3`: all four scenarios passed across 12 total
-  scenario-runs
+- governor soak `all`, `runs=5`: all four scenarios passed across 20 total
+  scenario-runs, with no tool-adherence violations and no unavailable-tool
+  requests
 
 Details and exact commands live in:
 
