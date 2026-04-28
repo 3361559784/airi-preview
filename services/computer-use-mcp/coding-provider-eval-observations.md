@@ -306,6 +306,44 @@ Current interpretation:
 - this is local/preview compatibility evidence only; do not claim upstream
   GitHub Models support from it
 
+### VectorEngine OpenAI-compatible endpoint
+
+Provider settings:
+
+```text
+AIRI_AGENT_BASE_URL=https://api.vectorengine.ai/v1
+```
+
+Status:
+
+```text
+deepseek-v3.2 default runner: TIMEOUT at step 1
+deepseek-v3.2-fast default runner: provider 429 before task execution
+```
+
+Observed results:
+
+- `deepseek-v3.2` accepted the request shape and entered the coding runner, but
+  the first model turn did not complete within the 30s step timeout.
+- `deepseek-v3.2-fast` reached the provider, but the provider returned `429`
+  with upstream-load saturation and `model_price_error`.
+- Neither result is evidence of a coding-runner protocol regression.
+
+Traces:
+
+```text
+/tmp/airi-coding-provider-matrix-vectorengine-deepseek-v32-default-20260428-211246.log
+/tmp/airi-coding-provider-matrix-vectorengine-deepseek-v32-fast-default-20260428-214756.log
+```
+
+Current interpretation:
+
+- the VectorEngine API base is usable as an OpenAI-compatible endpoint
+- `deepseek-v3.2` needs a longer step-timeout or a separate latency run before
+  it can be classified
+- `deepseek-v3.2-fast` is currently blocked by provider capacity/rate limiting,
+  not by tool schema or runner semantics
+
 ### Failure Mapping
 
 - `analysisReportRunner.status !== "completed"` means the analysis/report path
