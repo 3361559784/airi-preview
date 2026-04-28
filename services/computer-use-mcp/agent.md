@@ -132,67 +132,81 @@ Do not rely on compressed chat summaries to resume this work. Use this file as
 the current handoff index and update it when terminal-lane behavior changes
 materially.
 
-## Coding Line Current Baseline
+## Coding Line Closeout Snapshot
 
-Last reviewed: 2026-04-28
+Last reviewed: 2026-04-29
 Workstream: coding-line-product-stability
+
+This section is the current handoff memory for the coding line. It is repo-local
+documentation, not Codex long-term memory and not a product claim.
 
 Current branch baseline:
 
 ```text
 codex/coding-line-complete-local
-Latest runtime fix commit:
-  48555e197 fix(coding-runner): ignore stale source probes after validation evidence
-Latest status-doc commit before this note:
-  d7c3f6793 docs(computer-use-mcp): record coding governor soak r5 pass
 Remote target: 3361559784/airi-preview
+Latest pushed commits:
+  bd8f1d851 fix(computer-use-mcp): suppress completed eval failure rows
+  41ad81a07 fix(coding-runner): constrain validation recovery to workspace cwd
+  84807ca6a test(computer-use-mcp): classify coding eval outside-workspace validation detours
 ```
 
-The current DeepSeek live verification matrix is green:
+Current status:
 
-- combined live matrix: default runner, analysis/report, shell misuse recovery,
-  and auto proof recovery all `completed`
-- analysis/report: `completed`
-- shell misuse recovery: `passed`, with `dangerous_file_mutation` guard denial
-  exercised and recovered through `coding_apply_patch` plus validation
-- auto proof recovery: `passed`, with `missing_mutation_proof` completion
-  denial exercised and recovered through patch/read/review/validation
-- governor soak `all`, `runs=10`: all four scenarios passed across 40 total
-  scenario-runs, with no tool-adherence violations and no unavailable-tool
-  requests
+- Treat the coding line as a usable internal baseline for handoff, not as a
+  long-term-validated product-grade coding agent.
+- The latest DeepSeek default baseline completed the real runner loop:
+  search/read, patch, terminal validation, and `coding_report_status`.
+- The latest observed runner result was `completed` with `totalSteps=12`.
+- `workflow_coding_agentic_loop` can still fail in the deterministic scaffold;
+  that is not the transcript runner baseline.
+- We do not currently have enough local budget to prove long-run stability with
+  broad repeated live soaks. Do not overstate this baseline to reviewers.
+- If future resources are available, validate breadth before adding features.
 
-Details and exact commands live in:
+Recent stabilized contracts:
 
-- `coding-provider-eval-observations.md`
+- Text-only final is not accepted as completion; the runner allows only one
+  bounded report-only correction.
+- Archive recall is current-run-only, search-before-read, latest-search-only,
+  bounded, and labeled as historical evidence.
+- Analysis/report archive denial has a bounded finalization recovery path
+  without weakening archive recall discipline.
+- Task memory is labeled as runtime data, not executable instructions or system
+  authority.
+- Context assembly has an explicit coding-turn policy for trace and transcript
+  retention.
+- Terminal validation cwd is constrained to the active coding workspace in the
+  runner tool adapter, and bounded verification recheck uses the run workspace
+  instead of baseline temp worktree cwd.
+- Live eval replay reports now classify known failures and do not emit failure
+  rows for completed runs.
 
-Do not change runner runtime from this green matrix alone. If the next goal is
-more confidence, increase live soak breadth first. If a repeated failure appears,
-map it to the documented failure class before opening a narrow runtime follow-up.
+Current memory status:
 
-## Coding Line Structure And Resume Map
-
-Use this section as the quick restore point for the current coding-line state.
-
-Current state:
-
-- Treat `coding-line-product-stability` as a frozen internal baseline.
-- The baseline is green against DeepSeek, not a universal product guarantee.
-- Reopen the line only for a new live failure, provider matrix expansion, Chika
-  CLI handoff, or a specifically named follow-up.
-- Keep docs/status updates separate from runtime/tests commits.
+- Task Memory: close enough for this baseline. It is current-run state with
+  evidence pins, recent failure recovery, budget pressure, and a prompt trust
+  label. Do not expand `evidencePins` semantics unless a new live failure maps
+  directly there.
+- Archive Memory: close enough for this baseline. It is a current-run historical
+  evidence cache, not long-term memory and not instruction authority. Do not add
+  auto-promotion from archive into workspace memory.
+- Workspace Memory: governance substrate exists, but the product surface is not
+  complete. Review request/apply flows are groundwork only; CLI/GUI review,
+  stale/conflict lifecycle, and durable user-facing governance remain follow-up
+  work.
 
 What this baseline currently proves:
 
 - Existing-file edit loop can read/search, patch, validate, and report
-  completion.
-- Analysis/report can compress context, report completion, and pass the
-  report-only verification gate.
-- Shell misuse recovery can deny dangerous shell mutation and recover through
-  `coding_apply_patch` plus validation.
-- Auto proof recovery can deny missing mutation proof and recover through
-  patch/read/review/validation.
-- Governor soak contracts pass across baseline, shell misuse, auto proof
-  recovery, and fake-completion scenarios.
+  completion with DeepSeek.
+- Analysis/report has deterministic coverage for report-only completion and
+  archive-denial finalization recovery.
+- Shell misuse and missing mutation proof have bounded recovery contracts in
+  tests and previous live observations, but they should be revalidated before
+  claiming broad provider stability.
+- The eval replay layer can preserve failure evidence and map known failure
+  classes without treating successful runs as unknown failures.
 
 Primary code map:
 
