@@ -2,7 +2,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
 import { describe, expect, it } from 'vitest'
 
-import { buildCodingEvalReplayRow, inferEvalProviderLabel } from './coding-eval-replay'
+import { buildCodingEvalReplayRow, inferEvalProviderLabel, summarizeCodingEvalReplayRows } from './coding-eval-replay'
 
 function makeToolResult(structuredContent: Record<string, unknown>): CallToolResult {
   return {
@@ -113,6 +113,87 @@ describe('coding eval replay adapter', () => {
       result: makeToolResult({ status: 'ok' }),
       transcriptTools: [],
     })).toBeUndefined()
+  })
+
+  it('summarizes replay rows into follow-up mapping entries', () => {
+    const rows = [
+      buildCodingEvalReplayRow({
+        source: { label: 'analysis-report' },
+        result: makeToolResult({
+          runId: 'run-eval-archive',
+          status: 'failed',
+          totalSteps: 10,
+          lastError: 'ARCHIVE_RECALL_DENIED: artifact was not returned by the latest archive search',
+        }),
+        transcriptTools: [],
+      }),
+      buildCodingEvalReplayRow({
+        source: { label: 'provider-smoke' },
+        result: makeToolResult({
+          runId: 'run-eval-provider',
+          status: 'failed',
+          totalSteps: 1,
+          lastError: 'Remote sent 429 response: upstream load saturated',
+        }),
+        transcriptTools: [],
+      }),
+    ].filter((row): row is NonNullable<typeof row> => Boolean(row))
+
+    expect(summarizeCodingEvalReplayRows(rows)).toEqual({
+      totalRows: 2,
+      completedRows: 0,
+      failedRows: 2,
+      providerObservationRows: 1,
+      runtimeFollowUpRows: 1,
+      deterministicReplayRows: 0,
+      unknownRows: 0,
+      entries: [
+        {
+          label: 'analysis-report',
+          runId: 'run-eval-archive',
+          status: 'failed',
+          failureClass: 'archive_recall_finalization',
+          disposition: 'runtime_follow_up_if_repeated',
+          failureSignal: 'ARCHIVE_RECALL_DENIED: artifact was not returned by the latest archive search',
+          nextFollowUp: 'fix(coding-runner): recover analysis report after archive recall denial',
+          deterministicAnchor: 'src/coding-runner/coding-runner.test.ts archive recall finalization cases',
+        },
+        {
+          label: 'provider-smoke',
+          runId: 'run-eval-provider',
+          status: 'failed',
+          failureClass: 'provider_capacity_or_latency',
+          disposition: 'provider_observation_only',
+          failureSignal: 'Remote sent 429 response: upstream load saturated',
+          nextFollowUp: 'docs(computer-use-mcp): record provider matrix observation',
+          deterministicAnchor: 'coding-provider-eval-observations.md provider matrix notes',
+        },
+      ],
+    })
+  })
+
+  it('summarizes unknown rows with a deterministic replay fallback follow-up', () => {
+    const row = buildCodingEvalReplayRow({
+      source: { label: 'unmapped' },
+      result: makeToolResult({
+        runId: 'run-eval-unknown',
+        status: 'failed',
+        totalSteps: 2,
+        lastError: 'model stopped for an unexplained reason',
+      }),
+      transcriptTools: [],
+    })
+
+    expect(summarizeCodingEvalReplayRows(row ? [row] : [])).toMatchObject({
+      unknownRows: 1,
+      deterministicReplayRows: 1,
+      entries: [{
+        label: 'unmapped',
+        failureClass: 'unknown',
+        nextFollowUp: 'test(computer-use-mcp): add deterministic replay for unmapped coding live failure',
+        deterministicAnchor: undefined,
+      }],
+    })
   })
 
   it('infers provider labels from base URLs without requiring valid URLs', () => {

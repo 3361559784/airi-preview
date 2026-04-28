@@ -1,7 +1,9 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
+import type { CodingLiveFailureReplayRow } from '../coding-runner/live-failure-replay'
 import type { CodingRunnerResult, CodingRunnerTurnResult } from '../coding-runner/types'
 
+import { findCodingLiveFailureReplayCase } from '../coding-runner/live-failure-corpus'
 import { normalizeCodingLiveFailureReplay } from '../coding-runner/live-failure-replay'
 
 export interface EvalTranscriptToolResult {
@@ -25,6 +27,28 @@ export interface BuildCodingEvalReplayRowInput {
   result?: CallToolResult
   transcriptTools?: readonly EvalTranscriptToolResult[]
   source: CodingEvalReplaySource
+}
+
+export interface CodingEvalReplaySummaryEntry {
+  label?: string
+  runId: string
+  status: CodingRunnerResult['status']
+  failureClass: CodingLiveFailureReplayRow['failureClass']
+  disposition: CodingLiveFailureReplayRow['disposition']
+  failureSignal: string
+  nextFollowUp: string
+  deterministicAnchor?: string
+}
+
+export interface CodingEvalReplaySummary {
+  totalRows: number
+  completedRows: number
+  failedRows: number
+  providerObservationRows: number
+  runtimeFollowUpRows: number
+  deterministicReplayRows: number
+  unknownRows: number
+  entries: CodingEvalReplaySummaryEntry[]
 }
 
 /**
@@ -55,6 +79,19 @@ export function buildCodingEvalReplayRow(input: BuildCodingEvalReplayRowInput) {
   })
 }
 
+export function summarizeCodingEvalReplayRows(rows: readonly CodingLiveFailureReplayRow[]): CodingEvalReplaySummary {
+  return {
+    totalRows: rows.length,
+    completedRows: rows.filter(row => row.status === 'completed').length,
+    failedRows: rows.filter(row => row.status === 'failed' || row.status === 'crash' || row.status === 'timeout').length,
+    providerObservationRows: rows.filter(row => row.disposition === 'provider_observation_only').length,
+    runtimeFollowUpRows: rows.filter(row => row.disposition === 'runtime_follow_up_if_repeated').length,
+    deterministicReplayRows: rows.filter(row => row.disposition === 'deterministic_replay_first').length,
+    unknownRows: rows.filter(row => row.failureClass === 'unknown').length,
+    entries: rows.map(rowToSummaryEntry),
+  }
+}
+
 export function inferEvalProviderLabel(baseURL: string | undefined): string | undefined {
   if (!baseURL)
     return undefined
@@ -64,6 +101,21 @@ export function inferEvalProviderLabel(baseURL: string | undefined): string | un
   }
   catch {
     return baseURL
+  }
+}
+
+function rowToSummaryEntry(row: CodingLiveFailureReplayRow): CodingEvalReplaySummaryEntry {
+  const replayCase = findCodingLiveFailureReplayCase(row.failureClass)
+
+  return {
+    label: row.source?.label,
+    runId: row.runId,
+    status: row.status,
+    failureClass: row.failureClass,
+    disposition: row.disposition,
+    failureSignal: row.failureSignal,
+    nextFollowUp: replayCase?.nextFollowUp ?? 'test(computer-use-mcp): add deterministic replay for unmapped coding live failure',
+    deterministicAnchor: replayCase?.deterministicAnchor,
   }
 }
 

@@ -41,7 +41,7 @@ import { createRuntimeCoordinator } from '../server/runtime-coordinator'
 import { RunStateManager } from '../state'
 import { TaskMemoryManager } from '../task-memory/manager'
 import { createDisplayInfo, createLocalExecutionTarget, createTerminalState, createTestConfig } from '../test-fixtures'
-import { buildCodingEvalReplayRow, inferEvalProviderLabel } from './coding-eval-replay'
+import { buildCodingEvalReplayRow, inferEvalProviderLabel, summarizeCodingEvalReplayRows } from './coding-eval-replay'
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<CallToolResult>
 type EvalScenarioStatus = 'passed' | 'not_exercised' | 'failed'
@@ -896,6 +896,7 @@ async function runCompare() {
       structuredContent: resultB?.structuredContent,
     },
     codingLiveFailureReplayRows: replayRows,
+    codingLiveFailureReplaySummary: summarizeCodingEvalReplayRows(replayRows),
     ...(includeAnalysisReport
       ? {
           analysisReportRunner: {

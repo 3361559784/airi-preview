@@ -120,6 +120,13 @@ export const CODING_LIVE_FAILURE_REPLAY_CORPUS = [
   },
 ] as const satisfies readonly CodingLiveFailureReplayCase[]
 
+export function findCodingLiveFailureReplayCase(failureClass: CodingLiveFailureClass): CodingLiveFailureReplayCase | undefined {
+  if (failureClass === 'unknown')
+    return undefined
+
+  return CODING_LIVE_FAILURE_REPLAY_CORPUS.find(entry => entry.failureClass === failureClass)
+}
+
 export function classifyCodingLiveFailureText(input: string): CodingLiveFailureClassification {
   const text = input.trim()
   const lower = text.toLowerCase()

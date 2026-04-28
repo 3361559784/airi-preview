@@ -3,12 +3,15 @@ import { describe, expect, it } from 'vitest'
 import {
   classifyCodingLiveFailureText,
   CODING_LIVE_FAILURE_REPLAY_CORPUS,
+  findCodingLiveFailureReplayCase,
 } from './live-failure-corpus'
 
 describe('coding live failure replay corpus', () => {
   it('keeps corpus ids and deterministic anchors explicit', () => {
     const ids = CODING_LIVE_FAILURE_REPLAY_CORPUS.map(entry => entry.id)
     expect(new Set(ids).size).toBe(ids.length)
+    const failureClasses = CODING_LIVE_FAILURE_REPLAY_CORPUS.map(entry => entry.failureClass)
+    expect(new Set(failureClasses).size).toBe(failureClasses.length)
 
     for (const entry of CODING_LIVE_FAILURE_REPLAY_CORPUS) {
       expect(entry.observedSignal).not.toHaveLength(0)
@@ -25,6 +28,14 @@ describe('coding live failure replay corpus', () => {
         disposition: entry.disposition,
       })
     }
+  })
+
+  it('maps every known failure class back to its replay case', () => {
+    for (const entry of CODING_LIVE_FAILURE_REPLAY_CORPUS) {
+      expect(findCodingLiveFailureReplayCase(entry.failureClass)).toEqual(entry)
+    }
+
+    expect(findCodingLiveFailureReplayCase('unknown')).toBeUndefined()
   })
 
   it('maps report-only unavailable tool errors to tool adherence before generic text-only final', () => {
