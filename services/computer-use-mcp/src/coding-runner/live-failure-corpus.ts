@@ -7,6 +7,7 @@ export type CodingLiveFailureClass
   = | 'archive_recall_finalization'
     | 'completion_denied_missing_mutation_proof'
     | 'cwd_terminal_detour'
+    | 'outside_workspace_validation_detour'
     | 'provider_capacity_or_latency'
     | 'report_only_text_final'
     | 'report_only_tool_adherence'
@@ -72,6 +73,15 @@ export const CODING_LIVE_FAILURE_REPLAY_CORPUS = [
     deterministicAnchor: 'src/coding-runner/coding-runner.test.ts wrong-cwd terminal detour case',
     nextFollowUp: 'test(computer-use-mcp): cover coding provider cwd recovery noise',
     sample: 'terminal_exec({ command: "cat index.ts", cwd: "/Users/liuziheng/airi" }) failed: cat: index.ts: No such file or directory',
+  },
+  {
+    id: 'outside-workspace-validation-detour',
+    failureClass: 'outside_workspace_validation_detour',
+    disposition: 'deterministic_replay_first',
+    observedSignal: 'Validation/recovery drifted from the fixture workspace into an absolute repo path and hit the workspace guard.',
+    deterministicAnchor: 'src/bin/coding-eval-replay.test.ts outside-workspace validation detour classification',
+    nextFollowUp: 'fix(coding-runner): constrain validation recovery to workspace cwd',
+    sample: 'BUDGET_EXHAUSTED: coding runner reached maxSteps=15 without an accepted terminal report. lastTool=coding_search_text lastFailure=MCP error -32602: Search targetPath /Users/liuziheng/airi-coding-line is outside workspace /var/folders/xsai-governor-eval-kymz7M',
   },
   {
     id: 'stalled-read-search',
@@ -206,6 +216,23 @@ export function classifyCodingLiveFailureText(input: string): CodingLiveFailureC
       failureClass: 'stalled_exploration_governor',
       disposition: 'deterministic_replay_first',
       summary: 'The exploration governor fired after repeated stalled reads/searches.',
+    }
+  }
+
+  if (
+    lower.includes('outside workspace')
+    && (
+      lower.includes('search targetpath')
+      || lower.includes('coding_search_text')
+      || lower.includes('coding_search_symbol')
+      || lower.includes('validation')
+      || lower.includes('budget_exhausted')
+    )
+  ) {
+    return {
+      failureClass: 'outside_workspace_validation_detour',
+      disposition: 'deterministic_replay_first',
+      summary: 'Validation or recovery escaped the active workspace and hit the workspace guard; reproduce before changing runner cwd policy.',
     }
   }
 

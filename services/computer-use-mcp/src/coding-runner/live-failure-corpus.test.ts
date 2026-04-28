@@ -89,6 +89,16 @@ describe('coding live failure replay corpus', () => {
     expect(result.disposition).toBe('deterministic_replay_first')
   })
 
+  it('maps outside-workspace validation detours to deterministic replay first', () => {
+    const result = classifyCodingLiveFailureText(
+      'BUDGET_EXHAUSTED: coding runner reached maxSteps=15 without an accepted terminal report. lastTool=coding_search_text lastFailure=MCP error -32602: Search targetPath /Users/liuziheng/airi-coding-line is outside workspace /var/folders/xsai-governor-eval-kymz7M',
+    )
+
+    expect(result.failureClass).toBe('outside_workspace_validation_detour')
+    expect(result.disposition).toBe('deterministic_replay_first')
+    expect(result.summary).toContain('workspace guard')
+  })
+
   it('returns unknown for unmapped failures and asks for replay before runtime changes', () => {
     const result = classifyCodingLiveFailureText('model stopped for an unexplained reason')
 

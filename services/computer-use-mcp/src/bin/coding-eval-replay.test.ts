@@ -107,6 +107,56 @@ describe('coding eval replay adapter', () => {
     ])
   })
 
+  it('maps outside-workspace validation detours from live eval reports', () => {
+    const row = buildCodingEvalReplayRow({
+      source: {
+        label: 'baseline-edit',
+        provider: 'api.deepseek.com',
+        model: 'deepseek-v4-pro',
+      },
+      result: makeToolResult({
+        runId: 'run-eval-outside-workspace',
+        status: 'failed',
+        totalSteps: 15,
+        lastError: 'BUDGET_EXHAUSTED: coding runner reached maxSteps=15 without an accepted terminal report. lastTool=coding_search_text lastFailure=MCP error -32602: Search targetPath /Users/liuziheng/airi-coding-line is outside workspace /var/folders/xsai-governor-eval-kymz7M',
+      }),
+      transcriptTools: [
+        {
+          entryId: 11,
+          tool: 'coding_search_text',
+          args: {
+            query: 'DEBUG_MODE',
+            targetPath: '/Users/liuziheng/airi-coding-line',
+          },
+          ok: false,
+          status: 'exception',
+          error: 'MCP error -32602: Search targetPath /Users/liuziheng/airi-coding-line is outside workspace /var/folders/xsai-governor-eval-kymz7M',
+        },
+      ],
+    })
+
+    expect(row).toMatchObject({
+      runId: 'run-eval-outside-workspace',
+      status: 'failed',
+      totalSteps: 15,
+      failureClass: 'outside_workspace_validation_detour',
+      disposition: 'deterministic_replay_first',
+    })
+    expect(row?.classificationSummary).toContain('workspace guard')
+    expect(row?.toolHistory).toEqual([
+      {
+        index: 0,
+        role: 'tool',
+        toolName: 'coding_search_text',
+        resultOk: false,
+        status: 'exception',
+        argsPreview: '{"query":"DEBUG_MODE","targetPath":"/Users/liuziheng/airi-coding-line"}',
+        summary: undefined,
+        error: 'MCP error -32602: Search targetPath /Users/liuziheng/airi-coding-line is outside workspace /var/folders/xsai-governor-eval-kymz7M',
+      },
+    ])
+  })
+
   it('returns undefined for non-runner tool results', () => {
     expect(buildCodingEvalReplayRow({
       source: { label: 'agentic-loop' },
@@ -117,6 +167,16 @@ describe('coding eval replay adapter', () => {
 
   it('summarizes replay rows into follow-up mapping entries', () => {
     const rows = [
+      buildCodingEvalReplayRow({
+        source: { label: 'baseline-edit' },
+        result: makeToolResult({
+          runId: 'run-eval-outside-workspace',
+          status: 'failed',
+          totalSteps: 15,
+          lastError: 'BUDGET_EXHAUSTED: coding runner reached maxSteps=15 without an accepted terminal report. lastTool=coding_search_text lastFailure=MCP error -32602: Search targetPath /Users/liuziheng/airi-coding-line is outside workspace /var/folders/xsai-governor-eval-kymz7M',
+        }),
+        transcriptTools: [],
+      }),
       buildCodingEvalReplayRow({
         source: { label: 'analysis-report' },
         result: makeToolResult({
@@ -140,14 +200,24 @@ describe('coding eval replay adapter', () => {
     ].filter((row): row is NonNullable<typeof row> => Boolean(row))
 
     expect(summarizeCodingEvalReplayRows(rows)).toEqual({
-      totalRows: 2,
+      totalRows: 3,
       completedRows: 0,
-      failedRows: 2,
+      failedRows: 3,
       providerObservationRows: 1,
       runtimeFollowUpRows: 1,
-      deterministicReplayRows: 0,
+      deterministicReplayRows: 1,
       unknownRows: 0,
       entries: [
+        {
+          label: 'baseline-edit',
+          runId: 'run-eval-outside-workspace',
+          status: 'failed',
+          failureClass: 'outside_workspace_validation_detour',
+          disposition: 'deterministic_replay_first',
+          failureSignal: 'BUDGET_EXHAUSTED: coding runner reached maxSteps=15 without an accepted terminal report. lastTool=coding_search_text lastFailure=MCP error -32602: Search targetPath /Users/liuziheng/airi-coding-line is outside workspace /var/folders/xsai-governor-eval-kymz7M',
+          nextFollowUp: 'fix(coding-runner): constrain validation recovery to workspace cwd',
+          deterministicAnchor: 'src/bin/coding-eval-replay.test.ts outside-workspace validation detour classification',
+        },
         {
           label: 'analysis-report',
           runId: 'run-eval-archive',
