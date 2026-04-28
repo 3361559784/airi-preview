@@ -333,6 +333,70 @@ describe('codingRunner', () => {
     expect(events.filter(event => event.kind === 'verification_gate_evaluated').map(event => (event.payload as any).reasonCode)).toEqual(['review_missing', 'gate_pass'])
   })
 
+  it('does not let a stale source probe override successful validation after review recheck', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const events: CodingRunnerEventEnvelope[] = []
+    const state = createGateReadyState({
+      lastTerminalResult: {
+        command: 'pwd',
+        effectiveCwd: '/test',
+        exitCode: 0,
+        stdout: '/test',
+        stderr: '',
+        durationMs: 10,
+        timedOut: false,
+      },
+      coding: {
+        recentCommandResults: [
+          'Command: node check.js\nExit Code: 0\nStdout: Check Passed\nStderr: ',
+        ],
+        lastScopedValidationCommand: undefined,
+        lastChangeReview: undefined,
+      },
+    })
+    mockRuntime.stateManager.getState.mockImplementation(() => state)
+    mockExecuteAction.mockImplementation(async (action: any) => {
+      if (action.kind === 'coding_review_changes') {
+        state.coding.lastChangeReview = {
+          status: 'ready_for_next_file',
+          filesReviewed: ['index.ts'],
+          diffSummary: 'ok',
+          validationSummary: 'node check.js passed',
+          validationCommand: 'node check.js',
+          baselineComparison: 'unknown',
+          detectedRisks: [],
+          unresolvedIssues: [],
+          recommendedNextAction: 'report completion',
+        }
+      }
+      return { isError: false, content: [], structuredContent: { status: 'ok', action: action.kind } }
+    })
+    mockGenerateCompletedReport('done after review recheck')
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Complete after a stale source probe',
+      onEvent: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(mockExecuteAction).toHaveBeenCalledWith(
+      {
+        kind: 'coding_review_changes',
+        input: {},
+      },
+      'workflow_coding_runner_verification_recheck_review_changes',
+    )
+    expect(mockExecuteAction).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'terminal_exec' }),
+      'workflow_coding_runner_verification_recheck_terminal_exec',
+    )
+    expect(events.filter(event => event.kind === 'verification_gate_evaluated').map(event => (event.payload as any).reasonCode)).toEqual(['review_missing', 'gate_pass'])
+  })
+
   it('runs one bounded verification recheck when terminal evidence is missing and completes if recheck passes', async () => {
     const { mockRuntime, mockExecuteAction } = createMockDeps()
     const events: CodingRunnerEventEnvelope[] = []

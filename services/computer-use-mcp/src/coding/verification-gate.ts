@@ -127,6 +127,47 @@ function commandTargetsReviewedFiles(command: string, fileHints: string[]) {
   })
 }
 
+function parseRecentSuccessfulCommand(entry: string) {
+  const command = /^Command:\s*(.+)$/im.exec(entry)?.[1]
+  const exitCodeText = /^Exit Code:\s*(-?\d+)$/im.exec(entry)?.[1]
+  if (!command || exitCodeText === undefined)
+    return undefined
+
+  const exitCode = Number(exitCodeText)
+  if (!Number.isFinite(exitCode) || exitCode !== 0)
+    return undefined
+
+  return normalizeCommand(command)
+}
+
+function hasRecentSuccessfulValidationEvidence(params: {
+  codingState?: CodingRunState
+  fileHints: string[]
+  reviewValidationCommand?: string
+  scopedCommand?: string
+}) {
+  const reviewCommand = normalizeCommand(params.reviewValidationCommand)
+  const scopedCommand = normalizeCommand(params.scopedCommand)
+
+  return (params.codingState?.recentCommandResults || [])
+    .map(parseRecentSuccessfulCommand)
+    .some((command): command is string => {
+      if (!command)
+        return false
+
+      if (reviewCommand && command === reviewCommand)
+        return true
+
+      if (scopedCommand && command === scopedCommand)
+        return true
+
+      if (commandTargetsReviewedFiles(command, params.fileHints))
+        return true
+
+      return false
+    })
+}
+
 function isProjectLevelValidationCommand(command: string) {
   if (!command || OBVIOUS_NOOP_RE.test(command))
     return false
@@ -282,10 +323,23 @@ export function evaluateCodingVerificationGate(params: {
   )
 
   const isAllowedSourceDiscovery = reportOnlyCompletion && isReportOnlySourceDiscoveryProbe(candidateCommand)
-  if (OBVIOUS_NOOP_RE.test(candidateCommand) && !isAllowedSourceDiscovery) {
+  const hasRecentValidationEvidence = hasRecentSuccessfulValidationEvidence({
+    codingState,
+    fileHints,
+    reviewValidationCommand: review?.validationCommand,
+    scopedCommand,
+  })
+  // A stale source-discovery terminal command can remain as lastTerminalResult
+  // after a bounded review recheck. Do not let it mask already-recorded
+  // successful validation evidence that the review explicitly references.
+  const shouldIgnoreStaleNoopTerminal = isReportOnlySourceDiscoveryProbe(candidateCommand)
+    && !isAllowedSourceDiscovery
+    && hasRecentValidationEvidence
+
+  if (OBVIOUS_NOOP_RE.test(candidateCommand) && !isAllowedSourceDiscovery && !shouldIgnoreStaleNoopTerminal) {
     triggers.add('verification_bad_faith')
   }
-  else if (hasValidationCommandMismatch({
+  else if (!shouldIgnoreStaleNoopTerminal && hasValidationCommandMismatch({
     hasTerminalResult: terminalEvidence.hasTerminalResult,
     fileHints,
     reviewValidationCommand: review?.validationCommand,

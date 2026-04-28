@@ -433,6 +433,69 @@ describe('coding verification gate', () => {
     expect(decision.reasonCode).toBe('gate_pass')
   })
 
+  it('does not let a stale source probe override prior successful validation evidence', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createCodingState({
+        recentCommandResults: [
+          'Command: node check.js\nExit Code: 0\nStdout: Check Passed\nStderr: ',
+        ],
+        lastScopedValidationCommand: undefined,
+        lastChangeReview: {
+          status: 'ready_for_next_file',
+          filesReviewed: ['index.ts'],
+          diffSummary: 'ok',
+          validationSummary: 'node check.js passed',
+          validationCommand: 'node check.js',
+          baselineComparison: 'unknown',
+          detectedRisks: [],
+          unresolvedIssues: [],
+          recommendedNextAction: 'done',
+        },
+      }),
+      workflowKind: 'coding_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'pwd',
+        terminalExitCode: 0,
+      },
+    })
+
+    expect(decision.decision).toBe('pass')
+    expect(decision.reasonCode).toBe('gate_pass')
+    expect(decision.verificationEvidenceSummary.matchedTriggers).not.toContain('verification_bad_faith')
+  })
+
+  it('still rejects explicit bad-faith shortcuts even when prior validation exists', () => {
+    const decision = evaluateCodingVerificationGate({
+      codingState: createCodingState({
+        recentCommandResults: [
+          'Command: node check.js\nExit Code: 0\nStdout: Check Passed\nStderr: ',
+        ],
+        lastScopedValidationCommand: undefined,
+        lastChangeReview: {
+          status: 'ready_for_next_file',
+          filesReviewed: ['index.ts'],
+          diffSummary: 'ok',
+          validationSummary: 'node check.js passed',
+          validationCommand: 'node check.js',
+          baselineComparison: 'unknown',
+          detectedRisks: [],
+          unresolvedIssues: [],
+          recommendedNextAction: 'done',
+        },
+      }),
+      workflowKind: 'coding_loop',
+      terminalEvidence: {
+        hasTerminalResult: true,
+        terminalCommand: 'node -e "console.log(1)"',
+        terminalExitCode: 0,
+      },
+    })
+
+    expect(decision.decision).toBe('needs_follow_up')
+    expect(decision.reasonCode).toBe('verification_bad_faith')
+  })
+
   it('rejects divergent validation commands when scoped command is missing', () => {
     const decision = evaluateCodingVerificationGate({
       codingState: createCodingState({
