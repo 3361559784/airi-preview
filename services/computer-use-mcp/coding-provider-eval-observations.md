@@ -150,6 +150,162 @@ Trace locations from the latest run:
 services/computer-use-mcp/.computer-use-mcp/reports/soak/2026-04-28T12-11-26-696Z.jsonl
 ```
 
+## Provider Matrix Falsification Notes
+
+Last matrix expansion: 2026-04-28
+
+These observations expand the provider/model axis. They are live eval evidence,
+not product support claims.
+
+### DeepSeek chat
+
+Provider settings:
+
+```text
+AIRI_AGENT_BASE_URL=https://api.deepseek.com/v1
+AIRI_AGENT_MODEL=deepseek-chat
+```
+
+Status:
+
+```text
+combined matrix: PASS
+```
+
+Observed result:
+
+- default coding runner completed
+- analysis/report completed
+- shell misuse recovery passed
+- auto filesTouched completion-denial recovery passed
+
+Trace:
+
+```text
+/tmp/airi-coding-provider-matrix-deepseek-chat-20260428-204205.log
+```
+
+### DeepSeek reasoner
+
+Provider settings:
+
+```text
+AIRI_AGENT_BASE_URL=https://api.deepseek.com/v1
+AIRI_AGENT_MODEL=deepseek-reasoner
+```
+
+Status:
+
+```text
+default runner: PASS
+analysis/report: PASS
+auto-proof recovery: PASS
+shell-misuse scenario: PASS
+combined matrix: INCONCLUSIVE / interrupted after broad filesystem find output
+```
+
+Observed results:
+
+- default-only run completed
+- analysis/report-only run completed
+- auto-proof recovery completed
+- shell-misuse recovery completed
+- one shell-misuse run still failed the default runner before the scenario
+  conclusion because the final report-only correction requested unavailable
+  `coding_read_file` while only `coding_report_status` was exposed
+- one combined run emitted broad system `find` permission noise after entering
+  the analysis/report segment and was manually interrupted after exceeding the
+  normal interactive window
+
+Traces:
+
+```text
+/tmp/airi-coding-provider-matrix-deepseek-reasoner-default-20260428-204343.log
+/tmp/airi-coding-provider-matrix-deepseek-reasoner-combined-20260428-204426.log
+/tmp/airi-coding-provider-matrix-deepseek-reasoner-analysis-20260428-205125.log
+/tmp/airi-coding-provider-matrix-deepseek-reasoner-shell-20260428-205219.log
+/tmp/airi-coding-provider-matrix-deepseek-reasoner-autoproof-20260428-205335.log
+```
+
+Failure mapping:
+
+- unavailable `coding_read_file` during report-only correction maps to
+  tool-adherence under report-only finalization, not shell guard failure
+- broad system `find` output maps to workspace/cwd-scoped exploration noise,
+  not verification gate failure
+
+### GitHub Models OpenAI-compatible endpoint
+
+Provider settings:
+
+```text
+AIRI_AGENT_BASE_URL=https://models.github.ai/inference
+AIRI_AGENT_MODEL=openai/gpt-4.1-mini
+```
+
+Initial status:
+
+```text
+default runner: FAIL before first runner turn
+```
+
+Observed result:
+
+- provider rejected the tool schema for `coding_read_file`
+- error class: provider strict JSON schema compatibility
+- no task execution occurred
+
+Failure excerpt:
+
+```text
+Invalid schema for function 'coding_read_file': In context=(), 'required' is
+required to be supplied and to be an array including every key in properties.
+Missing 'endLine'.
+```
+
+Trace:
+
+```text
+/tmp/airi-coding-provider-matrix-github-gpt41mini-default-20260428-205104.log
+```
+
+Local compatibility follow-up:
+
+```text
+default runner: reached runner step 4, then failed with provider 429
+```
+
+Local-only compatibility changes tested:
+
+- runner xsai tool schemas were normalized so all object properties are listed
+  in `required`
+- optional properties accept explicit `null`, then the adapter normalizes them
+  back to `undefined` before invoking handlers
+- top-level `system` prompt was moved into a first `role: "system"` message
+  only for `https://models.github.ai/inference`
+
+Observed result after those local changes:
+
+- the previous `coding_read_file` schema rejection did not recur
+- the previous top-level `system` request rejection did not recur
+- the run reached `codingRunner.totalSteps: 4`
+- the provider then returned `429 Too many requests`
+
+Post-compat trace:
+
+```text
+/tmp/airi-coding-provider-matrix-github-gpt41mini-default-postsystem-20260428-210344.log
+```
+
+Current interpretation:
+
+- GitHub Models is no longer blocked by the two known request-shape issues in
+  the local branch
+- the remaining observed failure is provider quota/rate limiting, not runner
+  protocol
+- this is local/preview compatibility evidence only; do not claim upstream
+  GitHub Models support from it
+
 ### Failure Mapping
 
 - `analysisReportRunner.status !== "completed"` means the analysis/report path
@@ -168,6 +324,17 @@ services/computer-use-mcp/.computer-use-mcp/reports/soak/2026-04-28T12-11-26-696
 - Governor soak failure is scenario-specific. Map `existing-file` to patch
   mismatch recovery, `fake-completion` to completion denial, and
   `stalled-read` / `stalled-search` to analysis governor cutoff behavior.
+- Provider schema rejection before the first runner turn means the provider
+  adapter/schema surface is incompatible. Do not map it to model behavior.
+- Provider rate limiting after successful runner turns means the request reached
+  model execution. Do not map it to runner correctness without a non-rate-limit
+  failure body.
+- Unavailable-tool requests during report-only correction mean report-only
+  tool-adherence failed. Do not map them to shell guard, archive recall, or
+  verification gate.
+- Broad `find` / permission-denied output means the model entered unscoped
+  filesystem exploration. Treat it as provider/workspace-cwd falsification
+  evidence before changing runtime behavior.
 
 ## Confirmed Observations
 
@@ -369,11 +536,15 @@ Non-goals:
 
 ## Current Recommendation
 
-Do not change runtime behavior from the current DeepSeek matrix alone.
+Do not change runtime behavior from the current DeepSeek chat matrix alone.
 
-The current product-stability signal is healthy enough to freeze this baseline.
-If more evidence is needed, increase soak breadth first instead of changing
-runner logic:
+The current DeepSeek chat product-stability signal is healthy enough to keep as
+the internal baseline. The provider-matrix expansion is not uniformly green:
+DeepSeek reasoner has report-only adherence / unscoped exploration noise, and
+GitHub Models rejects the current tool schema before task execution.
+
+If more DeepSeek chat evidence is needed, increase soak breadth first instead
+of changing runner logic:
 
 ```text
 AIRI_SOAK_SCENARIO=all AIRI_SOAK_RUNS=3

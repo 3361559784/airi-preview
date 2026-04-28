@@ -15,8 +15,8 @@ import { TaskMemoryManager } from '../task-memory/manager'
 import { InMemoryTranscriptStore, TranscriptStore } from '../transcript/store'
 import { workspaceKeyFromPath, WorkspaceMemoryStore } from '../workspace-memory/store'
 import { createCodingRunnerEventEmitter } from './events'
-import { createCodingRunner } from './service'
-import { buildXsaiCodingTools } from './tool-runtime'
+import { buildProviderCompatibleGenerateTextInput, createCodingRunner } from './service'
+import { buildXsaiCodingTools, normalizeProviderStrictJsonSchema } from './tool-runtime'
 import { createTranscriptRuntime } from './transcript-runtime'
 
 vi.mock('@xsai/generate-text', async () => {
@@ -198,6 +198,37 @@ describe('codingRunner', () => {
     const { mockRuntime } = createMockDeps()
     const { store } = await createTranscriptRuntime(mockRuntime, 'test-run-id', '/test', true)
     expect(store).toBeInstanceOf(InMemoryTranscriptStore)
+  })
+
+  it('keeps top-level system prompts for normal OpenAI-compatible providers', () => {
+    const messages = [{ role: 'user', content: 'work' }]
+    const input = buildProviderCompatibleGenerateTextInput({
+      baseURL: 'https://api.deepseek.com/v1',
+      system: 'system prompt',
+      messages,
+    })
+
+    expect(input).toEqual({
+      system: 'system prompt',
+      messages,
+      projectedMessageCount: 1,
+    })
+  })
+
+  it('moves system prompts into messages for GitHub Models compatibility', () => {
+    const messages = [{ role: 'user', content: 'work' }]
+    const input = buildProviderCompatibleGenerateTextInput({
+      baseURL: 'https://models.github.ai/inference',
+      system: 'system prompt',
+      messages,
+    })
+
+    expect(input.system).toBeUndefined()
+    expect(input.messages).toEqual([
+      { role: 'system', content: 'system prompt' },
+      { role: 'user', content: 'work' },
+    ])
+    expect(input.projectedMessageCount).toBe(2)
   })
 
   it('should successfully complete when coding_report_status returns completed', async () => {
@@ -1843,6 +1874,50 @@ describe('codingRunner', () => {
       seq: 1,
       payload: { toolName: 'coding_read_file' },
     })
+  })
+
+  it('normalizes provider-strict schemas by requiring nullable optional properties', () => {
+    const schema = normalizeProviderStrictJsonSchema({
+      type: 'object',
+      properties: {
+        filePath: { type: 'string' },
+        startLine: { type: 'integer', minimum: 1 },
+        endLine: { type: 'integer', minimum: 1 },
+        nested: {
+          type: 'object',
+          properties: {
+            mode: { type: 'string' },
+            limit: { type: 'integer' },
+          },
+          required: ['mode'],
+          additionalProperties: false,
+        },
+      },
+      required: ['filePath'],
+      additionalProperties: false,
+    })
+
+    expect(schema.required).toEqual(['filePath', 'startLine', 'endLine', 'nested'])
+    expect(schema.properties.startLine.type).toEqual(['integer', 'null'])
+    expect(schema.properties.endLine.type).toEqual(['integer', 'null'])
+    expect(schema.properties.nested.type).toEqual(['object', 'null'])
+    expect(schema.properties.nested.properties.limit.type).toEqual(['integer', 'null'])
+    expect(schema.properties.nested.required).toEqual(['mode', 'limit'])
+  })
+
+  it('normalizes provider null optional arguments before invoking MCP handlers', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction)
+    const readFile = tools.find((toolDef: any) => toolDef.name === 'coding_read_file')
+    expect(readFile).toBeDefined()
+
+    const result = JSON.parse(await readFile.execute({
+      filePath: 'index.ts',
+      startLine: null,
+      endLine: null,
+    }))
+
+    expect(result.args).toEqual({ filePath: 'index.ts' })
   })
 
   it('strips cross-lane advisory from model-visible xsai tool summaries without mutating backend', async () => {

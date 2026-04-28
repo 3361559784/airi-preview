@@ -15,6 +15,38 @@ import { buildArchiveRecallFinalizationMemory, buildBudgetExhaustedMemory, build
 import { buildXsaiCodingTools } from './tool-runtime'
 import { createTranscriptRuntime, projectForCodingTurn } from './transcript-runtime'
 
+export function buildProviderCompatibleGenerateTextInput(params: {
+  baseURL: string
+  system: string
+  messages: any[]
+}): { system?: string, messages: any[], projectedMessageCount: number } {
+  if (!isGithubModelsBaseURL(params.baseURL)) {
+    return {
+      system: params.system,
+      messages: params.messages,
+      projectedMessageCount: params.messages.length,
+    }
+  }
+
+  return {
+    system: undefined,
+    messages: [
+      { role: 'system', content: params.system },
+      ...params.messages,
+    ],
+    projectedMessageCount: params.messages.length + 1,
+  }
+}
+
+function isGithubModelsBaseURL(baseURL: string): boolean {
+  try {
+    return new URL(baseURL).hostname === 'models.github.ai'
+  }
+  catch {
+    return false
+  }
+}
+
 export class CodingRunnerImpl implements CodingRunner {
   constructor(
     private readonly config: CodingRunnerConfig,
@@ -213,7 +245,12 @@ export class CodingRunnerImpl implements CodingRunner {
         const projection = projectForCodingTurn(transcriptStore, this.config.systemPromptBase, runtime, {
           workspaceMemoryContext,
         })
-        const projectedLength = projection.messages.length
+        const providerInput = buildProviderCompatibleGenerateTextInput({
+          baseURL: this.config.baseURL,
+          system: projection.system,
+          messages: projection.messages as any,
+        })
+        const projectedLength = providerInput.projectedMessageCount
 
         // Write archive candidates from this projection turn (deduped)
         await archiveStore.writeCandidates(projection.archiveCandidates, runId, taskId)
@@ -230,8 +267,8 @@ export class CodingRunnerImpl implements CodingRunner {
               analysisArchiveRecallCorrectionXsaiTools,
               xsaiTools,
             }) as any,
-            system: projection.system,
-            messages: projection.messages as any,
+            system: providerInput.system,
+            messages: providerInput.messages,
             abortSignal: controller.signal as any,
           })
           messages = result.messages
