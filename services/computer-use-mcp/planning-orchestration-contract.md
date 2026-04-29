@@ -40,6 +40,8 @@ The tested contract lives in:
 - `src/planning-orchestration/contract.test.ts`
 - `src/planning-orchestration/projection.ts`
 - `src/planning-orchestration/projection.test.ts`
+- `src/planning-orchestration/reconciliation.ts`
+- `src/planning-orchestration/reconciliation.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -52,6 +54,7 @@ The current contract defines:
 - planning authority precedence
 - planning guidance prompt label
 - bounded plan-state projection shape
+- deterministic plan evidence reconciliation
 
 ## PlanSpec
 
@@ -135,6 +138,43 @@ verification gates remain the authority.
 This is not automatic planning. No runner code generates `PlanSpec` or
 `PlanState` in this slice.
 
+## Evidence Reconciliation
+
+`reconcilePlanEvidence()` defines the first current-run evidence reconciliation
+contract. It is a pure function and is not wired into runner execution yet.
+
+Inputs:
+
+- `PlanSpec`
+- `PlanState`
+- explicit current-run evidence observations
+
+Evidence observations are intentionally narrow:
+
+- `stepId`
+- `source`: `tool_result | verification_gate | human_approval`
+- `status`: `satisfied | failed`
+- `summary`
+- optional tool or reason metadata
+
+Matching is exact by `stepId + source`. The reconciler must not infer evidence
+from natural language summaries, transcript text, memory entries, archive
+recall, or plan completion claims.
+
+Decision precedence is deterministic:
+
+1. structurally inconsistent plan state -> `fail`
+2. unknown current step or blockers -> `replan`
+3. failed current-run evidence -> `replan`
+4. current approval step missing human approval evidence -> `require_approval`
+5. every non-skipped step completed with matched expected evidence ->
+   `ready_for_final_verification`
+6. otherwise -> `continue`
+
+`ready_for_final_verification` still is not completion. It only means the plan
+contract believes the expected current-run evidence is present. The verification
+gate remains the completion authority.
+
 ## Trust Label
 
 Any model-visible plan block must start with:
@@ -174,6 +214,7 @@ Consequences:
 - A plan cannot override tool results.
 - A plan cannot bypass approval or verification gates.
 - A stale or superseded plan cannot delete or override current-run evidence.
+- Reconciled plan evidence cannot satisfy the verification gate by itself.
 
 ## Reconciler Contract
 
@@ -203,10 +244,10 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `test(computer-use-mcp): define plan evidence reconciliation contract`
-   - Map expected evidence to current-run tool evidence and verification gate
-     decisions.
-
-2. `feat(computer-use-mcp): route plan steps across lanes`
+1. `feat(computer-use-mcp): route plan steps across lanes`
    - Add deterministic routing only after projection and reconciliation are
      stable.
+
+2. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
+   - Consume current-run observations only after lane routing and approval
+     boundaries are explicit.

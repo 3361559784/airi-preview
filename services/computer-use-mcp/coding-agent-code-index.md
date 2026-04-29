@@ -33,7 +33,7 @@ tests win.
 | Workspace memory CLI | `src/bin/workspace-memory-review.ts`, `src/bin/smoke-workspace-memory-review.ts` | `src/bin/workspace-memory-review.test.ts` | Local operator workflow over the same append-only stores, including reviewed plast-mem bridge record export, optional ingestion, and semantic stale candidate listing. |
 | Plast-Mem bridge export/ingestion | `coding-plast-mem-bridge-contract.md`, `src/workspace-memory/exporters/plast-mem.ts`, `src/workspace-memory/exporters/plast-mem-ingestion.ts`, `src/workspace-memory/types.ts` | `src/workspace-memory/exporters/plast-mem.test.ts`, `src/workspace-memory/exporters/plast-mem-ingestion.test.ts` | Serializer plus optional `import_batch_messages` adapter for active human-verified workspace memory. No runner prompt integration. |
 | Workspace memory retrieval precedence | `workspace-memory-retrieval-precedence.md`, `src/workspace-memory/retrieval-precedence.ts`, `src/workspace-memory/plast-mem-pre-retrieve.ts` | `src/workspace-memory/retrieval-precedence.test.ts`, `src/workspace-memory/plast-mem-pre-retrieve.test.ts` | Deterministic conflict order for current-run evidence, local active memory, and optional bounded plast-mem pre-retrieve context. |
-| Planning orchestration contract | `planning-orchestration-contract.md`, `src/planning-orchestration/contract.ts`, `src/planning-orchestration/projection.ts`, `src/coding-runner/transcript-runtime.ts` | `src/planning-orchestration/contract.test.ts`, `src/planning-orchestration/projection.test.ts`, `src/coding-runner/transcript-runtime.test.ts` | Future cross-lane PlanSpec/PlanState authority and optional context projection contract. Not lane routing. |
+| Planning orchestration contract | `planning-orchestration-contract.md`, `src/planning-orchestration/contract.ts`, `src/planning-orchestration/projection.ts`, `src/planning-orchestration/reconciliation.ts`, `src/coding-runner/transcript-runtime.ts` | `src/planning-orchestration/contract.test.ts`, `src/planning-orchestration/projection.test.ts`, `src/planning-orchestration/reconciliation.test.ts`, `src/coding-runner/transcript-runtime.test.ts` | Future cross-lane PlanSpec/PlanState authority, optional context projection, and evidence reconciliation contract. Not lane routing. |
 | Coding primitives and proof gates | `src/coding/primitives.ts`, `src/coding/verification-gate.ts`, `src/coding/shell-command-guard.ts`, `src/coding/report-completion-evidence.ts` | `src/coding/primitives.test.ts`, `src/coding/verification-gate.test.ts`, `src/coding/shell-command-guard.test.ts` | Defines coding operations, validation proof, report evidence, and shell misuse constraints. |
 | Live failure replay | `src/coding-runner/live-failure-replay.ts`, `src/coding-runner/live-failure-corpus.ts`, `src/bin/coding-eval-replay.ts` | `src/coding-runner/live-failure-replay.test.ts`, `src/coding-runner/live-failure-corpus.test.ts`, `src/bin/coding-eval-replay.test.ts` | Maps live provider failures into deterministic replay/classification. |
 
@@ -235,6 +235,9 @@ flowchart LR
 - plan projection is bounded and current-run only
 - `projectForCodingTurn()` only injects plan projection when both `planSpec`
   and `planState` are supplied
+- reconciliation matches explicit current-run observations by exact `stepId`
+  and source
+- reconciled plan evidence still cannot satisfy verification gates
 - blocked/stale/superseded plan state is visible guidance, not failure or completion proof
 - cross-lane routing is not implemented by the contract slice
 - existing `coding_plan_changes` remains coding-lane internal planning
@@ -268,7 +271,7 @@ flowchart LR
 | `src/workspace-memory/retrieval-precedence.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/retrieval-precedence.test.ts` |
 | `src/workspace-memory/plast-mem-pre-retrieve.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/plast-mem-pre-retrieve.test.ts src/coding-runner/transcript-runtime.test.ts src/coding-runner/coding-runner.test.ts` |
 | `src/workspace-memory/semantic-stale.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/semantic-stale.test.ts` |
-| `src/planning-orchestration/contract.ts`, `src/planning-orchestration/projection.ts`, or plan projection wiring in `src/coding-runner/transcript-runtime.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/planning-orchestration/contract.test.ts src/planning-orchestration/projection.test.ts src/coding-runner/transcript-runtime.test.ts` |
+| `src/planning-orchestration/contract.ts`, `src/planning-orchestration/projection.ts`, `src/planning-orchestration/reconciliation.ts`, or plan projection wiring in `src/coding-runner/transcript-runtime.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/planning-orchestration/contract.test.ts src/planning-orchestration/projection.test.ts src/planning-orchestration/reconciliation.test.ts src/coding-runner/transcript-runtime.test.ts` |
 | `src/coding-runner/transcript-runtime.ts` or `src/coding-runner/context-policy.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/coding-runner/transcript-runtime.test.ts src/coding-runner/context-policy.test.ts src/coding-runner/coding-runner.test.ts` |
 | `src/coding-runner/service.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/coding-runner/coding-runner.test.ts` |
 | `src/coding-runner/tool-runtime.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/coding-runner/coding-runner.test.ts src/server/register-tools-coding-runner.test.ts` |
