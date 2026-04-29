@@ -24,7 +24,7 @@ tests win.
 |---|---|---|---|
 | Coding runner loop | `src/coding-runner/service.ts`, `src/coding-runner/types.ts`, `src/coding-runner/config.ts` | `src/coding-runner/coding-runner.test.ts` | Owns turn loop, tool calls, report handling, correction turns, and final status. |
 | Coding runner context assembly | `src/coding-runner/transcript-runtime.ts`, `src/coding-runner/context-policy.ts` | `src/coding-runner/transcript-runtime.test.ts`, `src/coding-runner/context-policy.test.ts` | Combines trace, task memory, workspace context, transcript projection, and archive candidates before model call. |
-| Task Memory | `src/task-memory/types.ts`, `src/task-memory/manager.ts`, `src/task-memory/merge.ts`, `src/coding-runner/memory.ts` | `src/task-memory/task-memory.test.ts` | Current-run recovery state only. Not long-term memory. |
+| Task Memory | `src/task-memory/types.ts`, `src/task-memory/manager.ts`, `src/task-memory/merge.ts`, `src/coding-runner/memory.ts` | `src/task-memory/task-memory.test.ts`, `src/coding-runner/memory.test.ts` | Current-run recovery state only. Not long-term memory. |
 | Transcript truth source | `src/transcript/store.ts`, `src/transcript/types.ts` | `src/transcript/transcript.test.ts` | Append-only LLM message truth source. |
 | Transcript projection | `src/transcript/projector.ts`, `src/transcript/retention.ts`, `src/transcript/block-parser.ts`, `src/transcript/compactor.ts` | `src/transcript/retention.test.ts`, `src/transcript/transcript.test.ts` | Disposable prompt projection from append-only transcript entries. |
 | Run Evidence Archive | `src/archived-context/candidates.ts`, `src/archived-context/store.ts`, `src/archived-context/serializer.ts`, `src/archived-context/types.ts` | `src/archived-context/archived-context.test.ts` | Current-run historical evidence. Search-before-read and latest-search-only. |
@@ -37,6 +37,10 @@ tests win.
 Failure replay contract:
 
 - `coding-failure-replay-contract.md`
+
+Evidence pin contract:
+
+- `coding-evidence-pin-contract.md`
 
 ## Runner Context Call Flow
 
@@ -178,6 +182,8 @@ flowchart LR
 - current-run only
 - runtime data, not executable instructions
 - evidence pins are bounded recovery anchors
+- evidence pin prefixes and non-pin recovery boundaries are documented in
+  `coding-evidence-pin-contract.md`
 - cannot override tool results, user instructions, or verification gates
 - cannot promote itself into workspace memory
 
@@ -218,7 +224,7 @@ flowchart LR
 
 | If touching | Run |
 |---|---|
-| `src/task-memory/*` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/task-memory/task-memory.test.ts` |
+| `src/task-memory/*` or `src/coding-runner/memory.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/task-memory/task-memory.test.ts src/coding-runner/memory.test.ts` |
 | `src/transcript/*` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/transcript/retention.test.ts src/transcript/transcript.test.ts` |
 | `src/archived-context/*` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/archived-context/archived-context.test.ts` |
 | `src/workspace-memory/*` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/workspace-memory.test.ts src/workspace-memory/review-request-store.test.ts src/server/register-workspace-memory.test.ts` |

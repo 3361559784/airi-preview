@@ -15,6 +15,9 @@ For agent-facing code navigation across these layers, see
 For the deterministic live-failure replay contract, see
 `coding-failure-replay-contract.md`.
 
+For the bounded current-run evidence pin contract, see
+`coding-evidence-pin-contract.md`.
+
 ## Summary
 
 `computer-use-mcp` should remember enough to keep a coding run stable, recover
@@ -256,7 +259,7 @@ Reopen only when:
 
 ### Slice 1: Boundary Documentation And Naming
 
-Status: in progress.
+Status: completed for the current baseline.
 
 Goal:
 
@@ -278,7 +281,7 @@ Do not include:
 
 ### Slice 2: Failure Replay Contract
 
-Status: in progress.
+Status: completed for the current baseline.
 
 Goal:
 
@@ -300,6 +303,8 @@ Do not include:
 - prompt bloat
 
 ### Slice 3: Evidence Pin Contract Review
+
+Status: completed for the current baseline.
 
 Goal:
 

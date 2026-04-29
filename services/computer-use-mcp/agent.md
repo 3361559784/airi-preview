@@ -211,6 +211,8 @@ Memory construction source:
   failure routing.
 - `coding-failure-replay-contract.md` defines how live coding failures become
   deterministic replay/classification evidence before runtime fixes.
+- `coding-evidence-pin-contract.md` defines Task Memory evidence pin prefixes,
+  limits, and the non-pin recovery boundary for text-only final correction.
 
 What this baseline currently proves:
 
