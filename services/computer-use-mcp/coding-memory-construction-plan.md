@@ -353,7 +353,8 @@ Do not include:
 
 Status: completed for the contract, serialization, local export baseline,
 optional operator-triggered plast-mem ingestion adapter, and bounded optional
-pre-retrieve prompt context.
+pre-retrieve prompt context. Semantic stale judgment is now defined as a
+pure contract; it does not mutate workspace memory or auto-clean entries.
 
 Goal:
 
@@ -370,6 +371,8 @@ Include:
 - optional disabled-by-default ingestion to plast-mem's message import path
 - optional disabled-by-default pre-retrieve from plast-mem's semantic context
   endpoint
+- semantic stale candidate judgment for source-file changes, review age,
+  current-run evidence conflicts, and plast-mem invalidation signals
 
 Do not include:
 

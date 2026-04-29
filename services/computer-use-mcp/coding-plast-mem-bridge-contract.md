@@ -251,8 +251,9 @@ The only safe prompt role is reviewed contextual evidence.
    - Current-run tool evidence and verification gates win over retrieved
      long-term context.
 
-2. `docs/test(computer-use-mcp): define semantic stale judgment contract`
-   - Define stale inputs and outputs before automatic stale decisions.
+2. `feat(computer-use-mcp): list semantic stale workspace memory candidates`
+   - Use the pure semantic stale judgment contract to list operator review
+     candidates without automatic cleanup.
 
 ## Acceptance Criteria
 

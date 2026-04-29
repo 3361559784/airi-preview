@@ -28,7 +28,7 @@ tests win.
 | Transcript truth source | `src/transcript/store.ts`, `src/transcript/types.ts` | `src/transcript/transcript.test.ts` | Append-only LLM message truth source. |
 | Transcript projection | `src/transcript/projector.ts`, `src/transcript/retention.ts`, `src/transcript/block-parser.ts`, `src/transcript/compactor.ts` | `src/transcript/retention.test.ts`, `src/transcript/transcript.test.ts` | Disposable prompt projection from append-only transcript entries. |
 | Run Evidence Archive | `src/archived-context/candidates.ts`, `src/archived-context/store.ts`, `src/archived-context/serializer.ts`, `src/archived-context/types.ts` | `src/archived-context/archived-context.test.ts` | Current-run historical evidence. Search-before-read and latest-search-only. |
-| Workspace Memory Adapter | `src/workspace-memory/store.ts`, `src/workspace-memory/review-request-store.ts`, `src/workspace-memory/types.ts` | `src/workspace-memory/workspace-memory.test.ts`, `src/workspace-memory/review-request-store.test.ts` | Governed local adapter and future `plast-mem` bridge. Not AIRI long-term memory. |
+| Workspace Memory Adapter | `src/workspace-memory/store.ts`, `src/workspace-memory/review-request-store.ts`, `src/workspace-memory/semantic-stale.ts`, `src/workspace-memory/types.ts` | `src/workspace-memory/workspace-memory.test.ts`, `src/workspace-memory/review-request-store.test.ts`, `src/workspace-memory/semantic-stale.test.ts` | Governed local adapter and future `plast-mem` bridge. Semantic stale judgment is pure candidate classification, not automatic status mutation. |
 | Workspace memory MCP surface | `src/server/register-workspace-memory.ts`, `src/server/tool-descriptors/workspace-memory.ts` | `src/server/register-workspace-memory.test.ts`, `src/server/register-tool-search.test.ts` | External request/apply/read surfaces. Apply/reject require explicit gate. |
 | Workspace memory CLI | `src/bin/workspace-memory-review.ts`, `src/bin/smoke-workspace-memory-review.ts` | `src/bin/workspace-memory-review.test.ts` | Local operator workflow over the same append-only stores, including reviewed plast-mem bridge record export and optional ingestion. |
 | Plast-Mem bridge export/ingestion | `coding-plast-mem-bridge-contract.md`, `src/workspace-memory/exporters/plast-mem.ts`, `src/workspace-memory/exporters/plast-mem-ingestion.ts`, `src/workspace-memory/types.ts` | `src/workspace-memory/exporters/plast-mem.test.ts`, `src/workspace-memory/exporters/plast-mem-ingestion.test.ts` | Serializer plus optional `import_batch_messages` adapter for active human-verified workspace memory. No runner prompt integration. |
@@ -51,6 +51,10 @@ Plast-Mem bridge contract:
 Workspace memory retrieval precedence contract:
 
 - `workspace-memory-retrieval-precedence.md`
+
+Workspace memory semantic stale contract:
+
+- `workspace-memory-semantic-stale-contract.md`
 
 ## Runner Context Call Flow
 
@@ -244,6 +248,7 @@ flowchart LR
 | `src/workspace-memory/exporters/plast-mem.ts` or `src/workspace-memory/exporters/plast-mem-ingestion.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/exporters/plast-mem.test.ts src/workspace-memory/exporters/plast-mem-ingestion.test.ts src/workspace-memory/workspace-memory.test.ts src/workspace-memory/review-request-store.test.ts` |
 | `src/workspace-memory/retrieval-precedence.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/retrieval-precedence.test.ts` |
 | `src/workspace-memory/plast-mem-pre-retrieve.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/plast-mem-pre-retrieve.test.ts src/coding-runner/transcript-runtime.test.ts src/coding-runner/coding-runner.test.ts` |
+| `src/workspace-memory/semantic-stale.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/semantic-stale.test.ts` |
 | `src/coding-runner/transcript-runtime.ts` or `src/coding-runner/context-policy.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/coding-runner/transcript-runtime.test.ts src/coding-runner/context-policy.test.ts src/coding-runner/coding-runner.test.ts` |
 | `src/coding-runner/service.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/coding-runner/coding-runner.test.ts` |
 | `src/coding-runner/tool-runtime.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/coding-runner/coding-runner.test.ts src/server/register-tools-coding-runner.test.ts` |

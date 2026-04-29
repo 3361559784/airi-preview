@@ -99,5 +99,6 @@ current-run tool results can prove mutation or validation evidence.
 
 ## Future Slices
 
-1. `docs/test: semantic stale judgment contract`
-   - Define stale/conflict inputs before any automatic status changes.
+1. `feat(computer-use-mcp): list semantic stale workspace memory candidates`
+   - Use the pure semantic stale judgment contract to expose review candidates
+     without mutating memory status.
