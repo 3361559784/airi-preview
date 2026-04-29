@@ -50,6 +50,8 @@ The tested contract lives in:
 - `src/planning-orchestration/workflow-handoff.test.ts`
 - `src/planning-orchestration/workflow-mapping.ts`
 - `src/planning-orchestration/workflow-mapping.test.ts`
+- `src/planning-orchestration/workflow-execution.ts`
+- `src/planning-orchestration/workflow-execution.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -67,6 +69,7 @@ The current contract defines:
 - bounded plan route summary projection shape
 - deterministic plan route to workflow handoff shape
 - deterministic plan handoff to workflow template mapping shape
+- explicit mapped workflow execution boundary
 
 ## PlanSpec
 
@@ -288,6 +291,33 @@ This is still not workflow execution. The mapper may create a static
 dispatch lane tools, infer params from plan prose, or treat a mapped workflow as
 completion proof.
 
+## Workflow Execution Boundary
+
+`executeMappedPlanWorkflow()` is the first explicit planning-to-workflow runtime
+wiring point. It accepts only a mapped `PlanWorkflowMappingResult` and delegates
+to the existing `executeWorkflow()` engine.
+
+Execution is allowed only when:
+
+- mapping status is `mapped`
+- a `WorkflowDefinition` is present
+- the workflow has at least one step
+
+The execution result must include:
+
+- `scope: current_run_plan_workflow_execution`
+- `status: completed | failed | paused | reroute_required | blocked`
+- `executed: true` only after `executeWorkflow()` is called
+- blocked problems for unmapped, missing, or empty workflows
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This boundary does not add an MCP tool and does not make the planner an
+authority. It uses the existing workflow engine, action executor, approval
+suspension, PTY acquisition, reroute, and formatter contracts. `autoApproveSteps`
+defaults to `false`; callers must opt in explicitly if they own a higher-level
+approval boundary.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -385,6 +415,7 @@ decides whether the run can report success.
 - No automatic lane execution.
 - No automatic workflow definition creation.
 - No automatic workflow execution.
+- No model-visible cross-lane execution tool.
 - No runtime lane router execution.
 - No MCP schema or tool-surface change.
 - No automatic creation of `PlanSpec` or `PlanState`.
@@ -396,9 +427,9 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): execute mapped plan workflows explicitly`
-   - Execute only caller-supplied mapped `WorkflowDefinition` values after
-     approval and host/run boundary decisions are explicit.
+1. `feat(computer-use-mcp): expose explicit plan workflow execution through host workflow boundary`
+   - Add a host-controlled surface only if schema, approval, and audit
+     boundaries are explicit.
 
 2. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
    - Consume current-run observations only after workflow mapping and approval

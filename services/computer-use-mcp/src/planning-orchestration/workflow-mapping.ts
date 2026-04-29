@@ -122,7 +122,7 @@ export function mapPlanHandoffToWorkflowDefinition(params: {
       name: params.name,
       description: params.description ?? `Mapped workflow for ${params.name}.`,
       steps,
-      maxRetries: params.maxRetries ?? 0,
+      maxRetries: params.maxRetries ?? 2,
     },
     problems: [],
     mayExecute: false,

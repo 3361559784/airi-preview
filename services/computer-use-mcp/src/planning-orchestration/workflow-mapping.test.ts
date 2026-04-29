@@ -222,4 +222,25 @@ describe('plan handoff to workflow mapping contract', () => {
     expect(result.maySatisfyVerificationGate).toBe(false)
     expect(result.maySatisfyMutationProof).toBe(false)
   })
+
+  it('defaults mapped workflows to a positive retry budget for workflow engine compatibility', () => {
+    const plan: PlanSpec = {
+      goal: 'Inspect current code.',
+      steps: [
+        step({ id: 'inspect', lane: 'coding', allowedTools: ['coding_read_file'] }),
+      ],
+    }
+
+    const result = mapPlanHandoffToWorkflowDefinition({
+      handoff: handoff(plan),
+      workflowId: 'default-retries',
+      name: 'Default Retries',
+      mappings: [
+        { stepId: 'inspect', kind: 'coding_read_file', params: { filePath: 'src/index.ts' } },
+      ],
+    })
+
+    expect(result.status).toBe('mapped')
+    expect(result.workflow?.maxRetries).toBe(2)
+  })
 })
