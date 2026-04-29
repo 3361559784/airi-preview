@@ -22,12 +22,15 @@ export interface CodingRunnerDependencies {
   useInMemoryTranscript?: boolean
 }
 
+export type PlanWorkflowExecutionMode = 'disabled' | 'read_only' | 'allow_writes'
+
 export interface RunCodingTaskParams {
   workspacePath: string
   taskGoal: string
   taskKind?: CodingTaskKind
   maxSteps?: number
   stepTimeoutMs?: number
+  planWorkflowExecutionMode?: PlanWorkflowExecutionMode
   /**
    * Explicit run identifier for archive deduplication.
    * Generated via crypto.randomUUID() if omitted.

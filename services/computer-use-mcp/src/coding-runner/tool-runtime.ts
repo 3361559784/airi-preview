@@ -1,8 +1,13 @@
 import type { ArchiveContextStore } from '../archived-context/store'
+import type { PlanSpec } from '../planning-orchestration/contract'
+import type { PlanLaneRoutingResult, PlanStepLaneRoute } from '../planning-orchestration/lane-router'
+import type { PlanRouteWorkflowHandoff } from '../planning-orchestration/workflow-handoff'
+import type { PlanWorkflowMappingResult, PlanWorkflowStepMappingInput } from '../planning-orchestration/workflow-mapping'
 import type { ExecuteAction } from '../server/action-executor'
 import type { ComputerUseServerRuntime } from '../server/runtime'
 import type { WorkspaceMemoryStore } from '../workspace-memory/store'
 import type { CodingRunnerEventEmitter } from './events'
+import type { PlanWorkflowExecutionMode } from './types'
 
 import path from 'node:path'
 
@@ -15,6 +20,10 @@ import {
   ARCHIVE_RECALL_MAX_READ_CHARS,
   ARCHIVE_RECALL_MAX_SEARCH_LIMIT,
 } from '../archived-context/types'
+import { routePlanSpec } from '../planning-orchestration/lane-router'
+import { executeMappedPlanWorkflow } from '../planning-orchestration/workflow-execution'
+import { buildPlanRouteWorkflowHandoff } from '../planning-orchestration/workflow-handoff'
+import { mapPlanHandoffToWorkflowDefinition } from '../planning-orchestration/workflow-mapping'
 import { registerComputerUseTools } from '../server/register-tools'
 import { initializeGlobalRegistry } from '../server/tool-descriptors'
 
@@ -46,6 +55,70 @@ const ALLOWED_CODING_TOOLS = [
   'terminal_get_state',
   'terminal_reset_state',
 ]
+
+const PLAN_WORKFLOW_STEP_KINDS = [
+  'ensure_app',
+  'change_directory',
+  'run_command',
+  'run_command_read_result',
+  'take_screenshot',
+  'observe_windows',
+  'click_element',
+  'type_into',
+  'press_shortcut',
+  'wait',
+  'evaluate',
+  'summarize',
+  'pty_send_input',
+  'pty_read_screen',
+  'pty_wait_for_output',
+  'pty_destroy_session',
+  'coding_review_workspace',
+  'coding_read_file',
+  'coding_apply_patch',
+  'coding_compress_context',
+  'coding_report_status',
+  'coding_search_text',
+  'coding_search_symbol',
+  'coding_find_references',
+  'coding_analyze_impact',
+  'coding_validate_hypothesis',
+  'coding_select_target',
+  'coding_plan_changes',
+  'coding_review_changes',
+  'coding_diagnose_changes',
+  'coding_capture_validation_baseline',
+] as const
+
+const planSpecSchema = z.object({
+  goal: z.string().min(1),
+  steps: z.array(z.object({
+    id: z.string().min(1),
+    lane: z.enum(['coding', 'desktop', 'browser_dom', 'terminal', 'human']),
+    intent: z.string().min(1),
+    allowedTools: z.array(z.string().min(1)),
+    expectedEvidence: z.array(z.object({
+      source: z.enum(['tool_result', 'verification_gate', 'human_approval']),
+      description: z.string().min(1),
+    })),
+    riskLevel: z.enum(['low', 'medium', 'high']),
+    approvalRequired: z.boolean(),
+  })).min(1).max(12),
+})
+
+const planWorkflowStepMappingSchema = z.object({
+  stepId: z.string().min(1),
+  kind: z.enum(PLAN_WORKFLOW_STEP_KINDS),
+  params: z.record(z.string(), z.unknown()),
+  label: z.string().min(1).optional(),
+  description: z.string().min(1).optional(),
+  critical: z.boolean().optional(),
+  skippable: z.boolean().optional(),
+  terminal: z.object({
+    mode: z.enum(['exec', 'auto', 'pty']),
+    interaction: z.enum(['one_shot', 'persistent']),
+  }).optional(),
+})
 
 type JsonSchemaObject = Record<string, any>
 
@@ -218,6 +291,7 @@ export interface BuildXsaiCodingToolsOptions {
   archiveStore?: ArchiveContextStore
   workspaceMemoryStore?: WorkspaceMemoryStore
   runId?: string
+  planWorkflowExecutionMode?: PlanWorkflowExecutionMode
 }
 
 export async function buildXsaiCodingTools(
@@ -225,7 +299,7 @@ export async function buildXsaiCodingTools(
   executeAction: ExecuteAction,
   options: BuildXsaiCodingToolsOptions = {},
 ) {
-  initializeGlobalRegistry()
+  const descriptorRegistry = initializeGlobalRegistry()
   const xsaiToolPromises: Promise<any>[] = []
 
   const mockServer = {
@@ -474,7 +548,224 @@ export async function buildXsaiCodingTools(
     }))
   }
 
+  const planWorkflowExecutionMode = options.planWorkflowExecutionMode ?? 'disabled'
+  if (planWorkflowExecutionMode !== 'disabled') {
+    xsaiToolPromises.push(createCodingXsaiTool({
+      name: 'coding_execute_plan_workflow',
+      description: 'Execute an explicitly mapped current-run plan workflow through the existing workflow engine. This is opt-in per run, treats plan data as guidance, and never satisfies verification gates by itself.',
+      parameters: z.object({
+        plan: planSpecSchema.describe('Current-run PlanSpec to route and execute.'),
+        mappings: z.array(planWorkflowStepMappingSchema).min(1).describe('Explicit mapping from plan step ids to WorkflowStepKind plus concrete params.'),
+        workflowId: z.string().min(1).optional().describe('Optional stable workflow id.'),
+        name: z.string().min(1).optional().describe('Optional workflow display name.'),
+        description: z.string().min(1).optional().describe('Optional workflow description.'),
+        maxRetries: z.number().int().min(1).max(5).optional().describe('Workflow retry budget. Defaults to mapped workflow default.'),
+      }),
+      execute: async (input: {
+        plan: PlanSpec
+        mappings: PlanWorkflowStepMappingInput[]
+        workflowId?: string
+        name?: string
+        description?: string
+        maxRetries?: number
+      }) => {
+        const normalizedInput = normalizeNullableToolInput(input) as {
+          plan: PlanSpec
+          mappings: PlanWorkflowStepMappingInput[]
+          workflowId?: string
+          name?: string
+          description?: string
+          maxRetries?: number
+        }
+        return executeInternalTool('coding_execute_plan_workflow', normalizedInput, options.events, async () => {
+          const routing = routePlanSpec({ plan: normalizedInput.plan, descriptors: descriptorRegistry })
+          const handoff = buildPlanRouteWorkflowHandoff({ plan: normalizedInput.plan, routing })
+          const mapping = mapPlanHandoffToWorkflowDefinition({
+            handoff,
+            mappings: normalizedInput.mappings,
+            workflowId: normalizedInput.workflowId ?? `plan-workflow-${options.runId ?? 'current-run'}`,
+            name: normalizedInput.name ?? normalizedInput.plan.goal,
+            description: normalizedInput.description,
+            maxRetries: normalizedInput.maxRetries,
+          })
+          const modeGuard = evaluatePlanWorkflowExecutionModeGuard(planWorkflowExecutionMode, routing)
+          const executableMapping = modeGuard.status === 'ok'
+            ? mapping
+            : {
+              ...mapping,
+              status: 'blocked' as const,
+              workflow: undefined,
+              problems: mapping.problems,
+            } satisfies PlanWorkflowMappingResult
+          const execution = await executeMappedPlanWorkflow({
+            mapping: executableMapping,
+            executeAction,
+            stateManager: runtime.stateManager,
+            refreshState: async () => {
+              await runtime.coordinator?.refreshSnapshot('workflow_start')
+            },
+            autoApproveSteps: false,
+          })
+          const status = modeGuard.status === 'blocked' ? 'blocked' : execution.status
+
+          return {
+            status,
+            summary: summarizePlanWorkflowExecution(status, execution.executed, modeGuard.problems),
+            backend: {
+              scope: 'current_run_plan_workflow_execution',
+              mode: planWorkflowExecutionMode,
+              status,
+              executed: execution.executed,
+              routing: summarizePlanRouting(routing),
+              handoff: summarizePlanWorkflowHandoff(handoff),
+              mapping: summarizePlanWorkflowMapping(mapping),
+              modeGuard,
+              execution,
+              maySatisfyVerificationGate: false,
+              maySatisfyMutationProof: false,
+            },
+          }
+        })
+      },
+    }))
+  }
+
   return Promise.all(xsaiToolPromises)
+}
+
+function evaluatePlanWorkflowExecutionModeGuard(
+  mode: Exclude<PlanWorkflowExecutionMode, 'disabled'>,
+  routing: PlanLaneRoutingResult,
+) {
+  const problems: Array<{
+    reason: 'route_blocked' | 'approval_required' | 'non_read_only_tool' | 'unsupported_pty_tool'
+    stepId: string
+    toolName?: string
+    detail: string
+  }> = []
+
+  for (const route of routing.routes) {
+    if (route.status === 'blocked') {
+      problems.push({
+        reason: 'route_blocked',
+        stepId: route.stepId,
+        detail: `Plan step ${route.stepId} is blocked by lane routing.`,
+      })
+    }
+
+    if (route.status === 'requires_approval' || route.approvalRequired) {
+      problems.push({
+        reason: 'approval_required',
+        stepId: route.stepId,
+        detail: `Plan step ${route.stepId} requires approval and cannot be executed by the coding-runner plan workflow tool in this slice.`,
+      })
+    }
+
+    for (const tool of route.routedTools) {
+      if (mode === 'read_only' && !tool.readOnly) {
+        problems.push({
+          reason: 'non_read_only_tool',
+          stepId: route.stepId,
+          toolName: tool.canonicalName,
+          detail: `Plan step ${route.stepId} routes non-read-only tool ${tool.canonicalName} while mode is read_only.`,
+        })
+      }
+
+      if (tool.lane === 'pty') {
+        problems.push({
+          reason: 'unsupported_pty_tool',
+          stepId: route.stepId,
+          toolName: tool.canonicalName,
+          detail: `Plan step ${route.stepId} routes PTY tool ${tool.canonicalName}; coding-runner plan workflow execution does not own a PTY prep callback yet.`,
+        })
+      }
+    }
+  }
+
+  return {
+    status: problems.length > 0 ? 'blocked' as const : 'ok' as const,
+    mode,
+    problems,
+  }
+}
+
+function summarizePlanWorkflowExecution(
+  status: string,
+  executed: boolean,
+  modeProblems: readonly { detail: string }[],
+): string {
+  if (modeProblems.length > 0)
+    return `Plan workflow execution blocked: ${modeProblems[0]!.detail}`
+
+  return `Plan workflow execution ${executed ? 'finished' : 'did not execute'} with status ${status}.`
+}
+
+function summarizePlanRouting(routing: PlanLaneRoutingResult) {
+  return {
+    scope: routing.scope,
+    blockedStepIds: routing.blockedStepIds,
+    approvalRequiredStepIds: routing.approvalRequiredStepIds,
+    routes: routing.routes.map(summarizePlanRoute),
+    mayExecute: routing.mayExecute,
+    maySatisfyVerificationGate: routing.maySatisfyVerificationGate,
+    maySatisfyMutationProof: routing.maySatisfyMutationProof,
+  }
+}
+
+function summarizePlanRoute(route: PlanStepLaneRoute) {
+  return {
+    stepId: route.stepId,
+    lane: route.lane,
+    status: route.status,
+    routedToolNames: route.routedToolNames,
+    routedTools: route.routedTools.map(tool => ({
+      canonicalName: tool.canonicalName,
+      lane: tool.lane,
+      readOnly: tool.readOnly,
+      destructive: tool.destructive,
+      requiresApprovalByDefault: tool.requiresApprovalByDefault,
+    })),
+    approvalRequired: route.approvalRequired,
+    approvalReasons: route.approvalReasons,
+    blockedReasons: route.blockedReasons,
+  }
+}
+
+function summarizePlanWorkflowHandoff(handoff: PlanRouteWorkflowHandoff) {
+  return {
+    scope: handoff.scope,
+    status: handoff.status,
+    readyForMappingStepIds: handoff.readyForMappingStepIds,
+    approvalRequiredStepIds: handoff.approvalRequiredStepIds,
+    blockedStepIds: handoff.blockedStepIds,
+    consistencyErrors: handoff.consistencyErrors,
+    mayExecute: handoff.mayExecute,
+    mayCreateWorkflowDefinition: handoff.mayCreateWorkflowDefinition,
+    maySatisfyVerificationGate: handoff.maySatisfyVerificationGate,
+    maySatisfyMutationProof: handoff.maySatisfyMutationProof,
+  }
+}
+
+function summarizePlanWorkflowMapping(mapping: PlanWorkflowMappingResult) {
+  return {
+    scope: mapping.scope,
+    status: mapping.status,
+    problems: mapping.problems,
+    workflow: mapping.workflow
+      ? {
+          id: mapping.workflow.id,
+          name: mapping.workflow.name,
+          stepCount: mapping.workflow.steps.length,
+          steps: mapping.workflow.steps.map(step => ({
+            label: step.label,
+            kind: step.kind,
+          })),
+        }
+      : undefined,
+    mayExecute: mapping.mayExecute,
+    maySatisfyVerificationGate: mapping.maySatisfyVerificationGate,
+    maySatisfyMutationProof: mapping.maySatisfyMutationProof,
+  }
 }
 
 function summarizeArgs(input: unknown): string {

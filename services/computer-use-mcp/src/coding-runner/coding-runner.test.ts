@@ -11,6 +11,7 @@ import * as xsaiGenerate from '@xsai/generate-text'
 import * as xsaiTool from '@xsai/tool'
 
 import { ArchiveContextStore } from '../archived-context/store'
+import { RunStateManager } from '../state'
 import { TaskMemoryManager } from '../task-memory/manager'
 import { InMemoryTranscriptStore, TranscriptStore } from '../transcript/store'
 import { PLAST_MEM_PRE_RETRIEVE_TRUST_LABEL } from '../workspace-memory/plast-mem-pre-retrieve'
@@ -2309,6 +2310,223 @@ describe('codingRunner', () => {
     expect(toolNames).toContain('coding_search_text')
     expect(toolNames).toContain('coding_apply_patch')
     expect(toolNames).toContain('coding_report_status')
+    expect(toolNames).not.toContain('coding_execute_plan_workflow')
+  })
+
+  it('exposes coding_execute_plan_workflow only when explicitly enabled per run', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+
+    const readOnlyTools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction, {
+      planWorkflowExecutionMode: 'read_only',
+    })
+    const writeTools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction, {
+      planWorkflowExecutionMode: 'allow_writes',
+    })
+
+    expect(readOnlyTools.map((toolDef: any) => toolDef.name)).toContain('coding_execute_plan_workflow')
+    expect(writeTools.map((toolDef: any) => toolDef.name)).toContain('coding_execute_plan_workflow')
+  })
+
+  it('executes read-only plan workflows without satisfying completion proof', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager = new RunStateManager()
+    mockRuntime.coordinator = { refreshSnapshot: vi.fn().mockResolvedValue(undefined) }
+
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction, {
+      planWorkflowExecutionMode: 'read_only',
+      runId: 'run-plan-workflow-readonly',
+    })
+    const planWorkflowTool = tools.find((toolDef: any) => toolDef.name === 'coding_execute_plan_workflow')
+    expect(planWorkflowTool).toBeDefined()
+
+    const result = JSON.parse(await planWorkflowTool.execute({
+      plan: {
+        goal: 'Read code and observe desktop.',
+        steps: [
+          {
+            id: 'read',
+            lane: 'coding',
+            intent: 'Read a file.',
+            allowedTools: ['coding_read_file'],
+            expectedEvidence: [{ source: 'tool_result', description: 'file contents returned' }],
+            riskLevel: 'low',
+            approvalRequired: false,
+          },
+          {
+            id: 'observe',
+            lane: 'desktop',
+            intent: 'Observe desktop windows.',
+            allowedTools: ['desktop_observe_windows'],
+            expectedEvidence: [{ source: 'tool_result', description: 'window list returned' }],
+            riskLevel: 'low',
+            approvalRequired: false,
+          },
+        ],
+      },
+      mappings: [
+        { stepId: 'read', kind: 'coding_read_file', params: { filePath: 'src/index.ts' } },
+        { stepId: 'observe', kind: 'observe_windows', params: { limit: 3 } },
+      ],
+      workflowId: 'readonly-plan',
+      name: 'Read-only plan',
+    }))
+
+    expect(result.ok).toBe(true)
+    expect(result.status).toBe('completed')
+    expect(result.backend).toMatchObject({
+      scope: 'current_run_plan_workflow_execution',
+      mode: 'read_only',
+      status: 'completed',
+      executed: true,
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    })
+    expect(result.backend.execution).toMatchObject({
+      scope: 'current_run_plan_workflow_execution',
+      status: 'completed',
+      executed: true,
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    })
+    expect(mockExecuteAction).toHaveBeenCalledWith(
+      { kind: 'coding_read_file', input: { filePath: 'src/index.ts' } },
+      'workflow_readonly-plan_step_1',
+      { skipApprovalQueue: false },
+    )
+    expect(mockExecuteAction).toHaveBeenCalledWith(
+      { kind: 'observe_windows', input: { limit: 3, app: undefined } },
+      'workflow_readonly-plan_step_2',
+      { skipApprovalQueue: false },
+    )
+  })
+
+  it('blocks non-read-only plan workflow steps in read-only mode before execution', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager = new RunStateManager()
+
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction, {
+      planWorkflowExecutionMode: 'read_only',
+    })
+    const planWorkflowTool = tools.find((toolDef: any) => toolDef.name === 'coding_execute_plan_workflow')
+
+    const result = JSON.parse(await planWorkflowTool.execute({
+      plan: {
+        goal: 'Click desktop.',
+        steps: [{
+          id: 'click',
+          lane: 'desktop',
+          intent: 'Click a point.',
+          allowedTools: ['desktop_click'],
+          expectedEvidence: [{ source: 'tool_result', description: 'click result' }],
+          riskLevel: 'low',
+          approvalRequired: false,
+        }],
+      },
+      mappings: [
+        { stepId: 'click', kind: 'click_element', params: { x: 10, y: 20 } },
+      ],
+    }))
+
+    expect(result.status).toBe('blocked')
+    expect(result.backend.executed).toBe(false)
+    expect(result.backend.modeGuard.problems).toEqual([
+      expect.objectContaining({ reason: 'non_read_only_tool', stepId: 'click', toolName: 'desktop_click' }),
+    ])
+    expect(mockExecuteAction).not.toHaveBeenCalled()
+  })
+
+  it('allows routable write steps in allow_writes mode without auto-approving', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager = new RunStateManager()
+    mockRuntime.coordinator = { refreshSnapshot: vi.fn().mockResolvedValue(undefined) }
+
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction, {
+      planWorkflowExecutionMode: 'allow_writes',
+    })
+    const planWorkflowTool = tools.find((toolDef: any) => toolDef.name === 'coding_execute_plan_workflow')
+
+    const result = JSON.parse(await planWorkflowTool.execute({
+      plan: {
+        goal: 'Type into focused UI.',
+        steps: [{
+          id: 'type',
+          lane: 'desktop',
+          intent: 'Type text.',
+          allowedTools: ['desktop_type_text'],
+          expectedEvidence: [{ source: 'tool_result', description: 'type result' }],
+          riskLevel: 'low',
+          approvalRequired: false,
+        }],
+      },
+      mappings: [
+        { stepId: 'type', kind: 'type_into', params: { text: 'hello' } },
+      ],
+      workflowId: 'write-plan',
+    }))
+
+    expect(result.status).toBe('completed')
+    expect(result.backend.mode).toBe('allow_writes')
+    expect(mockExecuteAction).toHaveBeenCalledWith(
+      { kind: 'type_text', input: { text: 'hello', pressEnter: undefined, captureAfter: true } },
+      'workflow_write-plan_step_1',
+      { skipApprovalQueue: false },
+    )
+  })
+
+  it('blocks approval-required plan workflow routes before execution', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager = new RunStateManager()
+
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction, {
+      planWorkflowExecutionMode: 'allow_writes',
+    })
+    const planWorkflowTool = tools.find((toolDef: any) => toolDef.name === 'coding_execute_plan_workflow')
+
+    const terminalResult = JSON.parse(await planWorkflowTool.execute({
+      plan: {
+        goal: 'Run validation.',
+        steps: [{
+          id: 'test',
+          lane: 'terminal',
+          intent: 'Run tests.',
+          allowedTools: ['terminal_exec'],
+          expectedEvidence: [{ source: 'tool_result', description: 'test command result' }],
+          riskLevel: 'low',
+          approvalRequired: false,
+        }],
+      },
+      mappings: [
+        { stepId: 'test', kind: 'run_command', params: { command: 'pnpm test', cwd: '/test' } },
+      ],
+    }))
+
+    const patchResult = JSON.parse(await planWorkflowTool.execute({
+      plan: {
+        goal: 'Patch file.',
+        steps: [{
+          id: 'patch',
+          lane: 'coding',
+          intent: 'Patch a file.',
+          allowedTools: ['coding_apply_patch'],
+          expectedEvidence: [{ source: 'tool_result', description: 'patch result' }],
+          riskLevel: 'low',
+          approvalRequired: false,
+        }],
+      },
+      mappings: [
+        { stepId: 'patch', kind: 'coding_apply_patch', params: { filePath: 'src/a.ts', oldString: 'a', newString: 'b' } },
+      ],
+    }))
+
+    expect(terminalResult.status).toBe('blocked')
+    expect(terminalResult.backend.modeGuard.problems).toEqual([
+      expect.objectContaining({ reason: 'approval_required', stepId: 'test' }),
+    ])
+    expect(patchResult.status).toBe('blocked')
+    expect(patchResult.backend.modeGuard.problems).toEqual([
+      expect.objectContaining({ reason: 'approval_required', stepId: 'patch' }),
+    ])
+    expect(mockExecuteAction).not.toHaveBeenCalled()
   })
 
   it('adds internal archived-context recall tools when an archive store is provided', async () => {
@@ -3550,6 +3768,56 @@ describe('codingRunner', () => {
     expect(mockRuntime.stateManager.updateTaskMemory).toHaveBeenCalledWith(expect.objectContaining({
       recentFailureReason: expect.stringContaining('text-only response'),
     }))
+  })
+
+  it('does not treat completed plan workflow tool output as runner completion', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => ({
+      messages: [
+        ...opts.messages,
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_plan_workflow',
+            function: { name: 'coding_execute_plan_workflow', arguments: '{}' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_plan_workflow',
+          content: JSON.stringify({
+            tool: 'coding_execute_plan_workflow',
+            args: {},
+            ok: true,
+            status: 'completed',
+            backend: {
+              scope: 'current_run_plan_workflow_execution',
+              status: 'completed',
+              executed: true,
+              maySatisfyVerificationGate: false,
+              maySatisfyMutationProof: false,
+            },
+          }),
+        },
+      ],
+    }) as any)
+
+    const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+    const result = await runner.runCodingTask({
+      workspacePath: '/test',
+      taskGoal: 'Execute a plan workflow but do not report status',
+      maxSteps: 1,
+      planWorkflowExecutionMode: 'read_only',
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toMatch(/^BUDGET_EXHAUSTED:/)
+    expect(result.turns[0]).toMatchObject({
+      role: 'tool',
+      toolName: 'coding_execute_plan_workflow',
+      resultOk: true,
+    })
   })
 
   it('recovers when the first report-only correction also returns text-only output', async () => {

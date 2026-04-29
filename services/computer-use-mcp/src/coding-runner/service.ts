@@ -59,7 +59,7 @@ export class CodingRunnerImpl implements CodingRunner {
   ) {}
 
   async runCodingTask(params: RunCodingTaskParams): Promise<CodingRunnerResult> {
-    const { workspacePath, taskGoal, taskKind = 'edit', maxSteps, stepTimeoutMs } = params
+    const { workspacePath, taskGoal, taskKind = 'edit', maxSteps, stepTimeoutMs, planWorkflowExecutionMode = 'disabled' } = params
     // V1: task_id = run_id; single task per invocation
     const runId = params.runId ?? randomUUID()
     const taskId = runId
@@ -107,6 +107,7 @@ export class CodingRunnerImpl implements CodingRunner {
       archiveStore,
       runId,
       workspaceMemoryStore,
+      planWorkflowExecutionMode,
     })
     const reportOnlyXsaiTools = xsaiTools.filter((tool: any) => getXsaiToolName(tool) === 'coding_report_status')
     const analysisArchiveRecallCorrectionXsaiTools = xsaiTools.filter((tool: any) => {

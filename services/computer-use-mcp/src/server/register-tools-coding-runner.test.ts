@@ -226,6 +226,7 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
     expect(structured.status).toBe('completed')
     expect(structured.totalSteps).toBeGreaterThanOrEqual(1)
     expect(structured.turnsLogLength).toBeGreaterThanOrEqual(1)
+    expect(vi.mocked(xsaiGenerate.generateText).mock.calls[0]?.[0].tools.map((tool: any) => tool.name)).not.toContain('coding_execute_plan_workflow')
 
     // Check executeAction array
     const actionKinds = executeAction.mock.calls.map(call => call[0].kind)
@@ -243,6 +244,56 @@ describe('registerComputerUseTools: workflow_coding_runner', () => {
       input: { workspacePath: '/tmp/project', createTemporaryWorktree: true },
     })
     expect(executeAction.mock.calls[1][1]).toBe('coding_capture_validation_baseline')
+  })
+
+  it('passes opt-in planWorkflowExecutionMode into workflow_coding_runner tool surface', async () => {
+    let toolNames: string[] = []
+    vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+      toolNames = opts.tools.map((tool: any) => tool.name)
+      return {
+        messages: [
+          ...opts.messages,
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_report',
+              function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+            }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_report',
+            content: JSON.stringify({
+              tool: 'coding_report_status',
+              args: { status: 'completed' },
+              ok: true,
+              status: 'ok',
+              backend: { status: 'completed' },
+            }),
+          },
+        ],
+      } as any
+    })
+
+    const executeAction = vi.fn<ExecuteAction>(async (action: ActionInvocation) => makeExecutedResult(action))
+    const { server, invoke } = createMockServer()
+
+    registerComputerUseTools({
+      server,
+      runtime,
+      executeAction,
+      enableTestTools: false,
+    })
+
+    const result = await invoke('workflow_coding_runner', {
+      workspacePath: '/tmp/project',
+      taskGoal: 'Refactor test',
+      planWorkflowExecutionMode: 'read_only',
+    })
+
+    expect(result.isError).toBe(false)
+    expect(toolNames).toContain('coding_execute_plan_workflow')
   })
 
   it('smoke test: aborts fast when coding_review_workspace bootstrap fails', async () => {

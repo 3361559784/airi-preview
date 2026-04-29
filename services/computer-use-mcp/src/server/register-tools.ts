@@ -2245,9 +2245,10 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
       taskKind: z.enum(['edit', 'analysis_report']).optional().describe('Completion discipline for this run. Use analysis_report only for non-mutating inspection/report tasks.'),
       maxSteps: z.number().int().min(1).optional().describe('Optional step limit.'),
       stepTimeoutMs: z.number().int().min(1000).optional().describe('Optional turn timeout.'),
+      planWorkflowExecutionMode: z.enum(['disabled', 'read_only', 'allow_writes']).optional().describe('Opt-in model-visible plan workflow execution mode. Default disabled.'),
     },
 
-    handler: async ({ workspacePath, taskGoal, taskKind, maxSteps, stepTimeoutMs }) => {
+    handler: async ({ workspacePath, taskGoal, taskKind, maxSteps, stepTimeoutMs, planWorkflowExecutionMode }) => {
       // Create isolated runner configuration
       const config = createDefaultCodingRunnerConfig()
 
@@ -2257,7 +2258,7 @@ export function registerComputerUseTools(params: RegisterComputerUseToolsOptions
       })
 
       // The runner executes its isolated projection mapping internally using transcript v1.
-      const result = await runner.runCodingTask({ workspacePath, taskGoal, taskKind, maxSteps, stepTimeoutMs })
+      const result = await runner.runCodingTask({ workspacePath, taskGoal, taskKind, maxSteps, stepTimeoutMs, planWorkflowExecutionMode })
 
       let summary = ''
       if (result.turns.length > 0) {
