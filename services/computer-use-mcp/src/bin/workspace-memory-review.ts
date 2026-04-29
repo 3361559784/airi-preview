@@ -1,3 +1,4 @@
+import type { CodingPlastMemBridgeRecordV1 } from '../workspace-memory/exporters/plast-mem'
 import type {
   WorkspaceMemoryEntry,
   WorkspaceMemoryReviewDecision,
@@ -9,10 +10,12 @@ import type {
 
 import { Buffer } from 'node:buffer'
 import { timingSafeEqual } from 'node:crypto'
-import { join } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { cwd, exit, env as processEnv, stderr as processStderr, stdout as processStdout } from 'node:process'
 
 import { resolveComputerUseConfig } from '../config'
+import { buildCodingPlastMemBridgeRecordV1, CODING_PLAST_MEM_BRIDGE_TRUST_V1 } from '../workspace-memory/exporters/plast-mem'
 import { WorkspaceMemoryReviewRequestStore } from '../workspace-memory/review-request-store'
 import { workspaceKeyFromPath, WorkspaceMemoryStore } from '../workspace-memory/store'
 
@@ -25,6 +28,7 @@ const WHITESPACE_RE = /\s+/g
 type WorkspaceMemoryCliCommand
   = | 'list'
     | 'read'
+    | 'export'
     | 'request-review'
     | 'list-requests'
     | 'list-stale-requests'
@@ -65,13 +69,19 @@ interface CliSuccessPayload {
   trust?: string
   workspaceKey: string
   statusFilter?: string
+  format?: WorkspaceMemoryExportFormat
+  outputPath?: string
+  recordCount?: number
   entries?: ReturnType<typeof toWorkspaceMemorySummary>[]
   entry?: ReturnType<typeof toWorkspaceMemoryPublicEntry> | ReturnType<typeof toWorkspaceMemorySummary>
+  records?: CodingPlastMemBridgeRecordV1[]
   requests?: WorkspaceMemoryReviewRequestRecord[]
   staleCandidates?: ReturnType<typeof toStaleCandidateSummary>[]
   request?: WorkspaceMemoryReviewRequestRecord
   pendingReviewId?: string
 }
+
+type WorkspaceMemoryExportFormat = 'jsonl' | 'json'
 
 interface CliErrorPayload {
   ok: false
@@ -105,6 +115,8 @@ async function runCommand(parsed: ParsedArgs, context: CliContext): Promise<void
       return await runList(parsed.flags, context)
     case 'read':
       return await runRead(parsed.flags, context)
+    case 'export':
+      return await runExport(parsed.flags, context)
     case 'request-review':
       return await runRequestReview(parsed.flags, context)
     case 'list-requests':
@@ -162,6 +174,46 @@ async function runRead(flags: Map<string, string | true>, context: CliContext): 
     `Statement: ${entry.statement}`,
     `Evidence: ${entry.evidence}`,
   ])
+}
+
+async function runExport(flags: Map<string, string | true>, context: CliContext): Promise<void> {
+  const store = await openWorkspaceMemoryStore(context)
+  const format = parseExportFormat(optionalString(flags, 'format') ?? 'jsonl')
+  const exportedAt = optionalString(flags, 'exported-at') ?? new Date().toISOString()
+  const outputPath = optionalString(flags, 'output')
+  const entries = filterWorkspaceMemoryEntries(store.getAll(), {
+    status: 'active',
+    query: optionalString(flags, 'query'),
+    limit: parseOptionalExportLimit(optionalString(flags, 'limit')),
+  })
+  const records = entries.map(entry => buildCodingPlastMemBridgeRecordV1({ entry, exportedAt }))
+  const exportBody = formatBridgeRecords(records, format)
+
+  if (outputPath) {
+    await mkdir(dirname(outputPath), { recursive: true })
+    await writeFile(outputPath, exportBody)
+  }
+
+  const payload: CliSuccessPayload = {
+    ok: true,
+    status: 'ok',
+    trust: CODING_PLAST_MEM_BRIDGE_TRUST_V1,
+    workspaceKey: context.workspaceKey,
+    format,
+    outputPath,
+    recordCount: records.length,
+    records,
+  }
+
+  if (outputPath || context.json) {
+    writeSuccess(context, payload, [
+      `Exported ${records.length} reviewed coding memory record${records.length === 1 ? '' : 's'}${outputPath ? ` to ${outputPath}` : ''}.`,
+      ...records.map(record => `- ${record.memoryId} [${record.kind}/${record.confidence}] ${record.statement}`),
+    ])
+    return
+  }
+
+  context.stdout.write(exportBody)
 }
 
 async function runRequestReview(flags: Map<string, string | true>, context: CliContext): Promise<void> {
@@ -392,7 +444,7 @@ function parseCommand(command: string): WorkspaceMemoryCliCommand {
 }
 
 function validCommands(): WorkspaceMemoryCliCommand[] {
-  return ['list', 'read', 'request-review', 'list-requests', 'list-stale-requests', 'read-request', 'apply', 'reject']
+  return ['list', 'read', 'export', 'request-review', 'list-requests', 'list-stale-requests', 'read-request', 'apply', 'reject']
 }
 
 function parseWorkspaceMemoryStatus(value: string): WorkspaceMemoryStatus | 'all' {
@@ -413,6 +465,12 @@ function parseReviewDecision(value: string): WorkspaceMemoryReviewDecision {
   throw new CliError(`Invalid review decision: ${value}`, 'WORKSPACE_MEMORY_REVIEW_CLI_USAGE')
 }
 
+function parseExportFormat(value: string): WorkspaceMemoryExportFormat {
+  if (value === 'jsonl' || value === 'json')
+    return value
+  throw new CliError(`Invalid workspace memory export format: ${value}`, 'WORKSPACE_MEMORY_REVIEW_CLI_USAGE')
+}
+
 function parseLimit(value: string | undefined): number {
   if (value === undefined)
     return DEFAULT_LIST_LIMIT
@@ -420,6 +478,15 @@ function parseLimit(value: string | undefined): number {
   if (!Number.isFinite(parsed))
     return DEFAULT_LIST_LIMIT
   return Math.min(MAX_LIST_LIMIT, Math.max(1, parsed))
+}
+
+function parseOptionalExportLimit(value: string | undefined): number | undefined {
+  if (value === undefined)
+    return undefined
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed))
+    return undefined
+  return Math.max(1, parsed)
 }
 
 function authorizeReviewApply(flags: Map<string, string | true>, context: CliContext): void {
@@ -447,15 +514,25 @@ function constantTimeStringEqual(expected: string, actual: string): boolean {
 
 function filterWorkspaceMemoryEntries(
   entries: readonly WorkspaceMemoryEntry[],
-  options: { status: WorkspaceMemoryStatus | 'all', query?: string, limit: number },
+  options: { status: WorkspaceMemoryStatus | 'all', query?: string, limit?: number },
 ): WorkspaceMemoryEntry[] {
   const normalizedQuery = normalizeQuery(options.query)
 
-  return entries
+  const filtered = entries
     .filter(entry => options.status === 'all' || entry.status === options.status)
     .filter(entry => !normalizedQuery || workspaceMemoryEntryHaystack(entry).includes(normalizedQuery))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, options.limit)
+
+  return options.limit === undefined ? filtered : filtered.slice(0, options.limit)
+}
+
+function formatBridgeRecords(records: CodingPlastMemBridgeRecordV1[], format: WorkspaceMemoryExportFormat): string {
+  if (format === 'json')
+    return `${JSON.stringify(records, null, 2)}\n`
+
+  return records.length > 0
+    ? `${records.map(record => JSON.stringify(record)).join('\n')}\n`
+    : ''
 }
 
 function workspaceMemoryEntryHaystack(entry: WorkspaceMemoryEntry): string {

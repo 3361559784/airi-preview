@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -174,6 +174,145 @@ describe('workspace memory review CLI', () => {
       code: 'WORKSPACE_MEMORY_ENTRY_NOT_FOUND',
     })
     expect(missing.error).toContain('Workspace memory entry not found: missing')
+  })
+
+  it('exports reviewed coding memory records to stdout as JSONL by default', async () => {
+    const proposed = await seedProposedMemory('Proposed memory must not export.')
+    const active = await seedActiveMemory('Active reviewed memory should export.')
+    const store = await createMemoryStore()
+    const rejectedCandidate = await store.propose({
+      kind: 'fact',
+      statement: 'Rejected memory must not export.',
+      evidence: 'Rejected entries are not eligible for plast-mem bridge export.',
+    })
+    await store.review({
+      id: rejectedCandidate.id,
+      decision: 'reject',
+      reviewer: 'maintainer',
+      rationale: 'Reject before export.',
+    })
+
+    const result = await runCli(baseArgs('export', [
+      '--exported-at',
+      '2026-04-29T02:00:00.000Z',
+    ]))
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe('')
+    const rows = result.stdout.trim().split('\n').map(row => JSON.parse(row) as Record<string, any>)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      schema: 'computer-use-mcp.coding-memory.v1',
+      source: 'computer-use-mcp',
+      workspaceKey,
+      memoryId: active.id,
+      statement: 'Active reviewed memory should export.',
+      humanVerified: true,
+      exportedAt: '2026-04-29T02:00:00.000Z',
+      trust: 'reviewed_coding_context_not_instruction_authority',
+    })
+    expect(rows[0].memoryId).not.toBe(proposed.id)
+    expect(rows[0].memoryId).not.toBe(rejectedCandidate.id)
+  })
+
+  it('exports all reviewed coding memory records by default instead of list-limiting to 20', async () => {
+    for (let index = 0; index < 25; index += 1)
+      await seedActiveMemory(`Reviewed memory ${index} should export.`)
+
+    const result = await runCli(baseArgs('export', [
+      '--exported-at',
+      '2026-04-29T02:00:00.000Z',
+    ]))
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe('')
+    expect(result.stdout.trim().split('\n')).toHaveLength(25)
+  })
+
+  it('supports explicit export limit without applying the list cap', async () => {
+    for (let index = 0; index < 55; index += 1)
+      await seedActiveMemory(`Reviewed memory ${index} can be explicitly limited.`)
+
+    const result = await runCli(baseArgs('export', [
+      '--limit',
+      '52',
+      '--exported-at',
+      '2026-04-29T02:00:00.000Z',
+    ]))
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe('')
+    expect(result.stdout.trim().split('\n')).toHaveLength(52)
+  })
+
+  it('exports reviewed coding memory records to a file and reports short human output', async () => {
+    const active = await seedActiveMemory('File export should write bridge records.')
+    const outputPath = join(tmpRoot, 'exports', 'plast-mem.jsonl')
+
+    const result = await runCli(baseArgs('export', [
+      '--output',
+      outputPath,
+      '--exported-at',
+      '2026-04-29T02:00:00.000Z',
+    ]))
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain(`Exported 1 reviewed coding memory record to ${outputPath}.`)
+    expect(result.stdout).toContain(active.id)
+
+    const rows = (await readFile(outputPath, 'utf8')).trim().split('\n').map(row => JSON.parse(row) as Record<string, any>)
+    expect(rows).toEqual([
+      expect.objectContaining({
+        memoryId: active.id,
+        trust: 'reviewed_coding_context_not_instruction_authority',
+      }),
+    ])
+  })
+
+  it('exports JSON payload for scripts when --json is requested', async () => {
+    const active = await seedActiveMemory('JSON export should be parseable.')
+
+    const exported = parseStdoutJson(await runCli(baseArgs('export', [
+      '--format',
+      'json',
+      '--exported-at',
+      '2026-04-29T02:00:00.000Z',
+      '--json',
+    ])))
+
+    expect(exported).toMatchObject({
+      ok: true,
+      status: 'ok',
+      trust: 'reviewed_coding_context_not_instruction_authority',
+      workspaceKey,
+      format: 'json',
+      recordCount: 1,
+      records: [
+        {
+          memoryId: active.id,
+          exportedAt: '2026-04-29T02:00:00.000Z',
+          trust: 'reviewed_coding_context_not_instruction_authority',
+        },
+      ],
+    })
+  })
+
+  it('rejects invalid export format with stable CLI usage code', async () => {
+    await seedActiveMemory('Invalid format should fail before exporting.')
+
+    const result = parseStderrJson(await runCli(baseArgs('export', [
+      '--format',
+      'yaml',
+      '--json',
+    ])))
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'error',
+      code: 'WORKSPACE_MEMORY_REVIEW_CLI_USAGE',
+    })
+    expect(result.error).toContain('Invalid workspace memory export format: yaml')
   })
 
   it('creates review requests without mutating memory and deduplicates pending memory-id decisions', async () => {

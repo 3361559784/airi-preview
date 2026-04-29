@@ -195,8 +195,10 @@ Current memory status:
   this is not AIRI's project-level long-term memory system. Project memory
   belongs to `plast-mem`; this package should keep workspace-memory-like context
   as a governed coding adapter boundary. MCP request/apply flows and the CLI are
-  operator-governed surfaces; GUI review, automatic stale/conflict cleanup, and
-  any `plast-mem` bridge remain follow-up work.
+  operator-governed surfaces. Reviewed active coding memory can be exported as
+  `CodingPlastMemBridgeRecordV1` records through the local CLI; GUI review,
+  automatic stale/conflict cleanup, and `plast-mem` HTTP ingestion remain
+  follow-up work.
 
 Memory construction source:
 

@@ -348,7 +348,7 @@ Do not include:
 
 ### Slice 5: Plast-Mem Bridge Design
 
-Status: completed for the contract and serialization baseline.
+Status: completed for the contract, serialization, and local export baseline.
 
 Goal:
 
