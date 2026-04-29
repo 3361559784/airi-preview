@@ -2373,6 +2373,7 @@ describe('codingRunner', () => {
 
     expect(result.ok).toBe(true)
     expect(result.status).toBe('completed')
+    expect(result.summary).toContain('Plan reconciliation skipped: missing_plan_state')
     expect(result.backend).toMatchObject({
       scope: 'current_run_plan_workflow_execution',
       mode: 'read_only',
@@ -2388,6 +2389,13 @@ describe('codingRunner', () => {
       maySatisfyVerificationGate: false,
       maySatisfyMutationProof: false,
     })
+    expect(result.backend.workflowReconciliation).toMatchObject({
+      scope: 'current_run_plan_workflow_reconciliation',
+      included: false,
+      skippedReason: 'missing_plan_state',
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    })
     expect(mockExecuteAction).toHaveBeenCalledWith(
       { kind: 'coding_read_file', input: { filePath: 'src/index.ts' } },
       'workflow_readonly-plan_step_1',
@@ -2398,6 +2406,80 @@ describe('codingRunner', () => {
       'workflow_readonly-plan_step_2',
       { skipApprovalQueue: false },
     )
+  })
+
+  it('reconciles plan workflow evidence only when planState is supplied', async () => {
+    const { mockRuntime, mockExecuteAction } = createMockDeps()
+    mockRuntime.stateManager = new RunStateManager()
+    mockRuntime.coordinator = { refreshSnapshot: vi.fn().mockResolvedValue(undefined) }
+
+    const tools = await buildXsaiCodingTools(mockRuntime, mockExecuteAction, {
+      planWorkflowExecutionMode: 'read_only',
+      runId: 'run-plan-workflow-reconcile',
+    })
+    const planWorkflowTool = tools.find((toolDef: any) => toolDef.name === 'coding_execute_plan_workflow')
+
+    const result = JSON.parse(await planWorkflowTool.execute({
+      plan: {
+        goal: 'Read code.',
+        steps: [
+          {
+            id: 'read',
+            lane: 'coding',
+            intent: 'Read a file.',
+            allowedTools: ['coding_read_file'],
+            expectedEvidence: [{ source: 'tool_result', description: 'file contents returned' }],
+            riskLevel: 'low',
+            approvalRequired: false,
+          },
+        ],
+      },
+      planState: {
+        completedSteps: ['read'],
+        failedSteps: [],
+        skippedSteps: [],
+        evidenceRefs: [],
+        blockers: [],
+      },
+      mappings: [
+        {
+          stepId: 'read',
+          kind: 'coding_read_file',
+          label: 'Read source with custom label',
+          params: { filePath: 'src/index.ts' },
+        },
+      ],
+      workflowId: 'reconcile-plan',
+      name: 'Reconcile plan',
+    }))
+
+    expect(result.status).toBe('completed')
+    expect(result.summary).toContain('Plan reconciliation decision: ready_for_final_verification')
+    expect(result.backend.workflowReconciliation).toMatchObject({
+      scope: 'current_run_plan_workflow_reconciliation',
+      included: true,
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+      reconciliation: {
+        scope: 'current_run_plan_evidence_reconciliation',
+        decision: {
+          decision: 'ready_for_final_verification',
+          reason: 'All non-skipped plan steps have matched current-run evidence.',
+        },
+        maySatisfyVerificationGate: false,
+        maySatisfyMutationProof: false,
+      },
+    })
+    expect(result.backend.workflowReconciliation.evidenceObservations).toEqual([
+      expect.objectContaining({
+        stepId: 'read',
+        source: 'tool_result',
+        status: 'satisfied',
+        toolName: 'coding_read_file',
+        reasonCode: 'workflow_step_success',
+      }),
+    ])
+    expect(result.backend.workflowReconciliation.evidenceObservations[0].summary).toContain('planStep=read')
   })
 
   it('blocks non-read-only plan workflow steps in read-only mode before execution', async () => {

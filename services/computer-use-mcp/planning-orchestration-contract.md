@@ -54,6 +54,8 @@ The tested contract lives in:
 - `src/planning-orchestration/workflow-execution.test.ts`
 - `src/planning-orchestration/workflow-evidence.ts`
 - `src/planning-orchestration/workflow-evidence.test.ts`
+- `src/planning-orchestration/workflow-reconciliation.ts`
+- `src/planning-orchestration/workflow-reconciliation.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -73,6 +75,7 @@ The current contract defines:
 - deterministic plan handoff to workflow template mapping shape
 - explicit mapped workflow execution boundary
 - deterministic workflow execution to plan evidence observation bridge
+- explicit workflow execution reconciliation summary
 
 ## PlanSpec
 
@@ -348,10 +351,39 @@ workflow can make a plan ready for final verification only when the plan
 expected `tool_result` evidence; it still cannot satisfy final verification by
 itself.
 
+## Workflow Reconciliation Summary
+
+`reconcilePlanWorkflowExecution()` defines the first explicit reconciliation
+summary for mapped workflow execution. It combines:
+
+- `PlanSpec`
+- optional current-run `PlanState`
+- `PlanWorkflowMappingResult`
+- `PlanWorkflowExecutionResult`
+- workflow-derived `tool_result` observations
+
+When `PlanState` is omitted, reconciliation is skipped and the result records
+`skippedReason: missing_plan_state`. This keeps the tool useful for execution
+without pretending it owns plan state. When workflow execution did not run,
+reconciliation is also skipped.
+
+When `PlanState` is supplied and workflow execution produced step results, the
+summary delegates to `reconcilePlanEvidence()`. The output remains current-run
+metadata:
+
+- `scope: current_run_plan_workflow_reconciliation`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This summary can say a plan is ready for final verification. It still cannot
+mark the coding runner completed, satisfy mutation proof, or bypass
+`coding_report_status`.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
-contract. It is a pure function and is not wired into runner execution yet.
+contract. It is a pure function. It is used by explicit workflow
+reconciliation summaries, but it is not a global runner completion path.
 
 Inputs:
 

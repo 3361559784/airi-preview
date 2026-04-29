@@ -1,8 +1,9 @@
 import type { ArchiveContextStore } from '../archived-context/store'
-import type { PlanSpec } from '../planning-orchestration/contract'
+import type { PlanSpec, PlanState } from '../planning-orchestration/contract'
 import type { PlanLaneRoutingResult, PlanStepLaneRoute } from '../planning-orchestration/lane-router'
 import type { PlanRouteWorkflowHandoff } from '../planning-orchestration/workflow-handoff'
 import type { PlanWorkflowMappingResult, PlanWorkflowStepMappingInput } from '../planning-orchestration/workflow-mapping'
+import type { PlanWorkflowReconciliationResult } from '../planning-orchestration/workflow-reconciliation'
 import type { ExecuteAction } from '../server/action-executor'
 import type { ComputerUseServerRuntime } from '../server/runtime'
 import type { WorkspaceMemoryStore } from '../workspace-memory/store'
@@ -24,6 +25,7 @@ import { routePlanSpec } from '../planning-orchestration/lane-router'
 import { executeMappedPlanWorkflow } from '../planning-orchestration/workflow-execution'
 import { buildPlanRouteWorkflowHandoff } from '../planning-orchestration/workflow-handoff'
 import { mapPlanHandoffToWorkflowDefinition } from '../planning-orchestration/workflow-mapping'
+import { reconcilePlanWorkflowExecution } from '../planning-orchestration/workflow-reconciliation'
 import { registerComputerUseTools } from '../server/register-tools'
 import { initializeGlobalRegistry } from '../server/tool-descriptors'
 
@@ -104,6 +106,20 @@ const planSpecSchema = z.object({
     riskLevel: z.enum(['low', 'medium', 'high']),
     approvalRequired: z.boolean(),
   })).min(1).max(12),
+})
+
+const planStateSchema = z.object({
+  currentStepId: z.string().min(1).optional(),
+  completedSteps: z.array(z.string().min(1)),
+  failedSteps: z.array(z.string().min(1)),
+  skippedSteps: z.array(z.string().min(1)),
+  evidenceRefs: z.array(z.object({
+    stepId: z.string().min(1),
+    source: z.enum(['tool_result', 'verification_gate', 'human_approval', 'runtime_trace']),
+    summary: z.string().min(1),
+  })),
+  blockers: z.array(z.string().min(1)),
+  lastReplanReason: z.string().min(1).optional(),
 })
 
 const planWorkflowStepMappingSchema = z.object({
@@ -555,6 +571,7 @@ export async function buildXsaiCodingTools(
       description: 'Execute an explicitly mapped current-run plan workflow through the existing workflow engine. This is opt-in per run, treats plan data as guidance, and never satisfies verification gates by itself.',
       parameters: z.object({
         plan: planSpecSchema.describe('Current-run PlanSpec to route and execute.'),
+        planState: planStateSchema.optional().describe('Optional current-run PlanState. When supplied, workflow tool results are reconciled against expected plan evidence.'),
         mappings: z.array(planWorkflowStepMappingSchema).min(1).describe('Explicit mapping from plan step ids to WorkflowStepKind plus concrete params.'),
         workflowId: z.string().min(1).optional().describe('Optional stable workflow id.'),
         name: z.string().min(1).optional().describe('Optional workflow display name.'),
@@ -563,6 +580,7 @@ export async function buildXsaiCodingTools(
       }),
       execute: async (input: {
         plan: PlanSpec
+        planState?: PlanState
         mappings: PlanWorkflowStepMappingInput[]
         workflowId?: string
         name?: string
@@ -571,6 +589,7 @@ export async function buildXsaiCodingTools(
       }) => {
         const normalizedInput = normalizeNullableToolInput(input) as {
           plan: PlanSpec
+          planState?: PlanState
           mappings: PlanWorkflowStepMappingInput[]
           workflowId?: string
           name?: string
@@ -607,10 +626,16 @@ export async function buildXsaiCodingTools(
             autoApproveSteps: false,
           })
           const status = modeGuard.status === 'blocked' ? 'blocked' : execution.status
+          const workflowReconciliation = reconcilePlanWorkflowExecution({
+            plan: normalizedInput.plan,
+            state: normalizedInput.planState,
+            mapping,
+            execution,
+          })
 
           return {
             status,
-            summary: summarizePlanWorkflowExecution(status, execution.executed, modeGuard.problems),
+            summary: summarizePlanWorkflowExecution(status, execution.executed, modeGuard.problems, workflowReconciliation),
             backend: {
               scope: 'current_run_plan_workflow_execution',
               mode: planWorkflowExecutionMode,
@@ -621,6 +646,7 @@ export async function buildXsaiCodingTools(
               mapping: summarizePlanWorkflowMapping(mapping),
               modeGuard,
               execution,
+              workflowReconciliation,
               maySatisfyVerificationGate: false,
               maySatisfyMutationProof: false,
             },
@@ -693,11 +719,16 @@ function summarizePlanWorkflowExecution(
   status: string,
   executed: boolean,
   modeProblems: readonly { detail: string }[],
+  reconciliation: PlanWorkflowReconciliationResult,
 ): string {
-  if (modeProblems.length > 0)
-    return `Plan workflow execution blocked: ${modeProblems[0]!.detail}`
+  const reconciliationSummary = reconciliation.included
+    ? ` Plan reconciliation decision: ${reconciliation.reconciliation?.decision.decision ?? 'none'}.`
+    : ` Plan reconciliation skipped: ${reconciliation.skippedReason ?? 'none'}.`
 
-  return `Plan workflow execution ${executed ? 'finished' : 'did not execute'} with status ${status}.`
+  if (modeProblems.length > 0)
+    return `Plan workflow execution blocked: ${modeProblems[0]!.detail}${reconciliationSummary}`
+
+  return `Plan workflow execution ${executed ? 'finished' : 'did not execute'} with status ${status}.${reconciliationSummary}`
 }
 
 function summarizePlanRouting(routing: PlanLaneRoutingResult) {
