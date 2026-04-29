@@ -55,33 +55,20 @@ Archive is not:
 
 ## Current Gaps
 
-- `src/archived-context/types.ts` still contains comments describing V1 as
-  write-only/no retrieval. That wording is stale and should be corrected in a
-  small follow-up.
 - Search is only current-run substring matching.
 - Search does not yet rank by tags, files, task id, or confidence.
-- Recalled archive content needs strong historical/evidence labeling whenever
-  it is inserted into future prompt context.
-- Archive and transcript projection currently duplicate retention defaults.
+- Recalled archive content is labeled as historical evidence, but future prompt
+  insertion paths must preserve that trust boundary.
+- Archive and transcript projection share the same retention policy path in the
+  runner, but the archive remains a coarse current-run substring recall surface.
 
 ## Next Archive-Specific Move
 
-Do not jump to long-term memory or workspace-memory promotion.
+Archive Context is closed for the current memory baseline.
 
-Next archive-specific slice:
-
-```text
-fix(computer-use-mcp): align archive recall contract and projection retention policy
-```
-
-Candidate work:
-
-- update stale archive comments
-- centralize retention policy shared by projection and archive candidate
-  generation
-- keep current-run search/read bounded
-- add tests for search limits, artifact id validation, and historical/evidence
-  labeling
+Do not add another archive-specific slice unless a repeated live failure maps
+directly to current-run recall quality, search noise, or archive-denial
+finalization.
 
 Non-goals:
 

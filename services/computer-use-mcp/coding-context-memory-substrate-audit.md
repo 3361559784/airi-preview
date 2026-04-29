@@ -126,6 +126,35 @@ Current implementation does not support:
 
 Correct label: current-run recallable archive, not long-term memory.
 
+## Archive Context Closeout
+
+Archive Context is closed for the current memory baseline.
+
+Accepted contract:
+
+- archive artifacts are produced only from transcript blocks removed by
+  projection pressure
+- archive search/read is current-run-only
+- read requires an artifact id returned by the latest archive search
+- zero-hit search clears the previous read allowlist
+- archive payloads are labeled `historical_evidence_not_instructions`
+- archive recall denial is a valid guardrail, not a reason to weaken recall
+  discipline
+- analysis/report archive-denial recovery must finalize from visible current
+  context instead of retrying archive recall
+
+Stop conditions:
+
+- do not add cross-run archive search
+- do not add vector archive retrieval
+- do not auto-replay archive artifacts into every prompt
+- do not auto-promote archive content into workspace memory
+- do not treat archived content as instruction authority
+
+Archive can be reopened only when a repeated live failure maps directly to
+current-run recall quality, search noise, or archive-denial finalization. It
+should not be reopened just to make the memory system feel more complete.
+
 ## Current Workspace Memory Status
 
 Workspace memory exists but governance is not complete.
@@ -223,6 +252,36 @@ Archive and task-memory boundaries:
 Correct governance label: workspace memory is rare, reviewed, and high-trust
 retrieved context. It is not a dumping ground for model summaries.
 
+## Task Memory Closeout
+
+Task Memory is closed for the current memory baseline.
+
+Accepted contract:
+
+- task memory is current-run state, not long-term memory
+- task memory is injected through the pinned system header as runtime data, not
+  instructions
+- evidence pins are small recovery anchors, not a semantic memory language
+- budget pressure, recent failure, completion criteria, and validation evidence
+  may guide recovery but never bypass runtime proof gates
+- task memory cannot promote itself, archive content, or model summaries into
+  workspace memory
+- task memory updates remain runner-owned; there is no general model search or
+  browse surface for it
+
+Stop conditions:
+
+- do not expand `evidencePins` into a general fact store
+- do not persist task memory across runs
+- do not let task memory override current user instructions, tool results, or
+  verification gates
+- do not add new task-memory fields unless a concrete live failure requires a
+  new recovery class
+
+Task Memory can be reopened only for a repeated recovery failure with a narrow
+evidence class. It should not absorb workspace-memory governance, archive
+recall, or planner state.
+
 ## Workspace Memory Lifecycle Governance
 
 Workspace memory lifecycle is explicit and operator-governed. The model may
@@ -304,11 +363,8 @@ Tool-surface boundaries:
 
 ## Known Gaps
 
-- Documentation drift: `archived-context/types.ts` and older docs still describe V1 as write-only/no retrieval, while current-run search/read now exist.
-- Status drift: older archive status notes still describe blockers that have since been fixed in code/tests.
 - Projection constants are duplicated between transcript projection, archive candidate generation, and runner runtime wiring.
 - Operational trace projection and transcript projection are composed in `projectForCodingTurn()`, but budget ownership is not yet one explicit policy.
-- Task memory injection is useful but still string-oriented; failure summaries and previous model text need stronger "runtime data, not instruction" labeling.
 - Workspace memory is queried from the initial task goal; mid-run task redirection does not yet have a stronger retrieval strategy.
 - Archive search is current-run substring matching only. This is acceptable for V1, but it is not a general memory retrieval system.
 - Long tasks may still lose specific validation/edit/review evidence under projection pressure unless those evidence classes are explicitly pinned.

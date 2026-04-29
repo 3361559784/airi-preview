@@ -184,13 +184,13 @@ Recent stabilized contracts:
 
 Current memory status:
 
-- Task Memory: close enough for this baseline. It is current-run state with
-  evidence pins, recent failure recovery, budget pressure, and a prompt trust
-  label. Do not expand `evidencePins` semantics unless a new live failure maps
-  directly there.
-- Archive Memory: close enough for this baseline. It is a current-run historical
-  evidence cache, not long-term memory and not instruction authority. Do not add
-  auto-promotion from archive into workspace memory.
+- Task Memory: closed for this baseline. It is current-run state with evidence
+  pins, recent failure recovery, budget pressure, and a prompt trust label. Do
+  not expand `evidencePins` semantics unless a new live failure maps directly
+  there.
+- Archive Memory: closed for this baseline. It is a current-run historical
+  evidence cache, not long-term memory and not instruction authority. Do not
+  add auto-promotion from archive into workspace memory.
 - Workspace Memory: governance substrate and local review CLI exist, but the
   product surface is not complete. MCP request/apply flows and the CLI are
   operator-governed surfaces; GUI review, automatic stale/conflict cleanup, and
