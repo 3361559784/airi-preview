@@ -86,6 +86,7 @@ describe('registerWorkspaceMemoryTools', () => {
     expect(hasTool('workspace_memory_read')).toBe(true)
     expect(hasTool('workspace_memory_request_review')).toBe(true)
     expect(hasTool('workspace_memory_list_review_requests')).toBe(true)
+    expect(hasTool('workspace_memory_list_stale_review_requests')).toBe(true)
     expect(hasTool('workspace_memory_read_review_request')).toBe(true)
     expect(hasTool('workspace_memory_apply_review_request')).toBe(true)
     expect(hasTool('workspace_memory_reject_review_request')).toBe(true)
@@ -281,6 +282,74 @@ describe('registerWorkspaceMemoryTools', () => {
         id: pendingReviewId,
         memoryId: proposed.id,
         decision: 'activate',
+      },
+    })
+  })
+
+  it('lists stale review request candidates without resolving them', async () => {
+    const seedStore = await createSeedStore()
+    const proposed = await seedStore.propose({
+      kind: 'fact',
+      statement: 'Stale MCP candidates should be visible before apply.',
+      evidence: 'The target can change after a review request is created.',
+    })
+    const { server, invoke } = createMockServer()
+    registerWorkspaceMemoryTools(server, runtime)
+
+    const requestResult = await invoke('workspace_memory_request_review', {
+      workspacePath,
+      id: proposed.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Activate if the snapshot is still current.',
+    })
+    const pendingReviewId = (requestResult.structuredContent as any).pendingReviewId
+    const requestRowsBefore = await reviewRequestRows()
+
+    await seedStore.review({
+      id: proposed.id,
+      decision: 'reject',
+      reviewer: 'maintainer',
+      rationale: 'Target changed after review request.',
+    })
+
+    const result = await invoke('workspace_memory_list_stale_review_requests', {
+      workspacePath,
+      query: 'stale mcp candidates',
+    })
+
+    expect(result.structuredContent).toMatchObject({
+      status: 'ok',
+      trust: 'workspace_memory_review_request_not_instructions',
+      workspaceKey: workspaceKeyFromPath(workspacePath),
+      staleCandidates: [
+        {
+          staleReason: 'target_status_changed',
+          request: {
+            id: pendingReviewId,
+            memoryId: proposed.id,
+            status: 'pending',
+            targetStatus: 'proposed',
+            targetStatement: proposed.statement,
+          },
+          currentEntry: {
+            id: proposed.id,
+            status: 'rejected',
+            statement: proposed.statement,
+          },
+        },
+      ],
+    })
+    expect(await reviewRequestRows()).toHaveLength(requestRowsBefore.length)
+
+    const readResult = await invoke('workspace_memory_read_review_request', {
+      workspacePath,
+      id: pendingReviewId,
+    })
+    expect(readResult.structuredContent).toMatchObject({
+      request: {
+        id: pendingReviewId,
+        status: 'pending',
       },
     })
   })

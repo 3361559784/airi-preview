@@ -148,6 +148,7 @@ describe('registerToolDirectory', () => {
       'workspace_memory_read',
       'workspace_memory_request_review',
       'workspace_memory_list_review_requests',
+      'workspace_memory_list_stale_review_requests',
       'workspace_memory_read_review_request',
       'workspace_memory_apply_review_request',
       'workspace_memory_reject_review_request',
@@ -175,6 +176,12 @@ describe('registerToolDirectory', () => {
       requiresApprovalByDefault: false,
     })
     expect(byName.get('workspace_memory_list_review_requests')).toMatchObject({
+      readOnly: true,
+      destructive: false,
+      concurrencySafe: true,
+      requiresApprovalByDefault: false,
+    })
+    expect(byName.get('workspace_memory_list_stale_review_requests')).toMatchObject({
       readOnly: true,
       destructive: false,
       concurrencySafe: true,

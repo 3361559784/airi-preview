@@ -1,6 +1,10 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
-import type { WorkspaceMemoryEntry, WorkspaceMemoryStatus } from '../workspace-memory/types'
+import type {
+  WorkspaceMemoryEntry,
+  WorkspaceMemoryReviewRequestStaleCandidate,
+  WorkspaceMemoryStatus,
+} from '../workspace-memory/types'
 import type { ComputerUseServerRuntime } from './runtime'
 
 import { Buffer } from 'node:buffer'
@@ -146,6 +150,33 @@ export function registerWorkspaceMemoryTools(server: McpServer, runtime: Compute
           workspaceKey: workspaceKeyFromPath(workspacePath),
           statusFilter,
           requests,
+        },
+      }
+    },
+  })
+
+  registerToolWithDescriptor(server, {
+    descriptor: requireDescriptor('workspace_memory_list_stale_review_requests'),
+    schema: {
+      workspacePath: z.string().min(1).describe('Absolute path to the workspace root whose stale memory review requests should be listed.'),
+      query: z.string().optional().describe('Optional case-insensitive query matched against stale request fields and current target snapshot.'),
+      limit: z.number().int().min(1).max(MAX_LIST_LIMIT).optional().describe(`Maximum number of stale candidates to return. Default ${DEFAULT_LIST_LIMIT}, max ${MAX_LIST_LIMIT}.`),
+    },
+    handler: async ({ workspacePath, query, limit }) => {
+      const memoryStore = await openWorkspaceMemoryStore(runtime, workspacePath)
+      const requestStore = await openWorkspaceMemoryReviewRequestStore(runtime, workspacePath)
+      const staleCandidates = await requestStore.listStaleCandidates(
+        request => memoryStore.read(request.memoryId),
+        { query, limit },
+      )
+
+      return {
+        content: [textContent(`Found ${staleCandidates.length} stale workspace memory review request candidate${staleCandidates.length === 1 ? '' : 's'}.`)],
+        structuredContent: {
+          status: 'ok',
+          trust: REVIEW_REQUEST_TRUST_BOUNDARY,
+          workspaceKey: workspaceKeyFromPath(workspacePath),
+          staleCandidates: staleCandidates.map(toStaleCandidateSummary),
         },
       }
     },
@@ -346,6 +377,21 @@ function toWorkspaceMemoryPublicEntry(entry: WorkspaceMemoryEntry): Record<strin
     evidence: entry.evidence,
     sourceRunId: entry.sourceRunId,
     source: entry.source,
+  }
+}
+
+function toStaleCandidateSummary(candidate: WorkspaceMemoryReviewRequestStaleCandidate): Record<string, unknown> {
+  return {
+    staleReason: candidate.staleReason,
+    request: candidate.request,
+    currentEntry: candidate.currentEntry
+      ? {
+          id: candidate.currentEntry.id,
+          status: candidate.currentEntry.status,
+          updatedAt: candidate.currentEntry.updatedAt,
+          statement: candidate.currentEntry.statement,
+        }
+      : undefined,
   }
 }
 

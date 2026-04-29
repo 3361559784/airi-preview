@@ -163,6 +163,7 @@ describe('registerToolSearch', () => {
 
     expect(names).toContain('workspace_memory_request_review')
     expect(names).toContain('workspace_memory_list_review_requests')
+    expect(names).toContain('workspace_memory_list_stale_review_requests')
     expect(names).toContain('workspace_memory_read_review_request')
     expect(names).toContain('workspace_memory_apply_review_request')
     expect(names).toContain('workspace_memory_reject_review_request')
