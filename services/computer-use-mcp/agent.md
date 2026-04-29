@@ -209,6 +209,8 @@ Memory construction source:
 - `coding-agent-code-index.md` is the agent-facing code navigation index for
   those layers: concept-to-file map, call graph, invariants, test map, and
   failure routing.
+- `coding-failure-replay-contract.md` defines how live coding failures become
+  deterministic replay/classification evidence before runtime fixes.
 
 What this baseline currently proves:
 

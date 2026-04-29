@@ -34,6 +34,10 @@ tests win.
 | Coding primitives and proof gates | `src/coding/primitives.ts`, `src/coding/verification-gate.ts`, `src/coding/shell-command-guard.ts`, `src/coding/report-completion-evidence.ts` | `src/coding/primitives.test.ts`, `src/coding/verification-gate.test.ts`, `src/coding/shell-command-guard.test.ts` | Defines coding operations, validation proof, report evidence, and shell misuse constraints. |
 | Live failure replay | `src/coding-runner/live-failure-replay.ts`, `src/coding-runner/live-failure-corpus.ts`, `src/bin/coding-eval-replay.ts` | `src/coding-runner/live-failure-replay.test.ts`, `src/coding-runner/live-failure-corpus.test.ts`, `src/bin/coding-eval-replay.test.ts` | Maps live provider failures into deterministic replay/classification. |
 
+Failure replay contract:
+
+- `coding-failure-replay-contract.md`
+
 ## Runner Context Call Flow
 
 Do not modify this flow unless the task explicitly targets coding context
@@ -201,6 +205,14 @@ flowchart LR
 - correction turns must stay bounded
 - unavailable tool requests are tool-adherence failures, not hidden success
 - workspace cwd matters for validation recovery
+
+### Failure Replay
+
+- same input produces the same replay row
+- normalizer must not mutate runner result or event inputs
+- completed eval results do not produce failure rows
+- source provider/model/log metadata is evidence, not classification authority
+- unknown failures route to deterministic replay before runtime changes
 
 ## Test Map
 

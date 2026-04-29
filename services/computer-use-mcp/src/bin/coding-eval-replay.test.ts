@@ -213,6 +213,35 @@ describe('coding eval replay adapter', () => {
     })).toBeUndefined()
   })
 
+  it('preserves source metadata without using it as classification authority', () => {
+    const row = buildCodingEvalReplayRow({
+      source: {
+        label: 'provider-capacity-looking-run',
+        provider: 'api.deepseek.com',
+        model: 'deepseek-v4-pro',
+        logPath: '/tmp/coding-eval-provider.log',
+      },
+      result: makeToolResult({
+        runId: 'run-eval-source-metadata',
+        status: 'failed',
+        totalSteps: 2,
+        lastError: 'model stopped for an unexplained reason',
+      }),
+      transcriptTools: [],
+    })
+
+    expect(row).toMatchObject({
+      source: {
+        label: 'provider-capacity-looking-run',
+        provider: 'api.deepseek.com',
+        model: 'deepseek-v4-pro',
+        logPath: '/tmp/coding-eval-provider.log',
+      },
+      failureClass: 'unknown',
+      disposition: 'deterministic_replay_first',
+    })
+  })
+
   it('summarizes replay rows into follow-up mapping entries', () => {
     const rows = [
       buildCodingEvalReplayRow({

@@ -29,6 +29,61 @@ function makeEvent<T extends CodingRunnerEventEnvelope['kind']>(
 }
 
 describe('coding live failure replay normalizer', () => {
+  it('is deterministic and does not mutate runner result or event inputs', () => {
+    const result = makeResult({
+      totalSteps: 3,
+      error: 'TEXT_ONLY_FINAL: assistant ended without coding_report_status',
+      turns: [
+        {
+          role: 'tool',
+          toolName: 'terminal_exec',
+          toolArgs: { command: 'node check.js', cwd: '/tmp/workspace' },
+          resultOk: true,
+          rawText: JSON.stringify({
+            tool: 'terminal_exec',
+            ok: true,
+            status: 'executed',
+            summary: 'node check.js passed',
+            backend: {
+              command: 'node check.js',
+              effectiveCwd: '/tmp/workspace',
+              terminalState: { effectiveCwd: '/Users/liuziheng/airi' },
+              exitCode: 0,
+              timedOut: false,
+              stdout: 'Check Passed',
+            },
+          }),
+        },
+        { role: 'assistant', rawText: 'Everything is done.' },
+      ],
+    })
+    const events = [
+      makeEvent('assistant_message', { text: 'Everything is done.' }),
+      makeEvent('run_finished', {
+        finalStatus: 'failed',
+        totalSteps: 3,
+        error: 'TEXT_ONLY_FINAL',
+      }, 2),
+    ]
+    const source = {
+      label: 'deepseek baseline',
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      logPath: '/tmp/coding-baseline.log',
+    }
+    const resultBefore = structuredClone(result)
+    const eventsBefore = structuredClone(events)
+    const sourceBefore = structuredClone(source)
+
+    const first = normalizeCodingLiveFailureReplay({ result, events, source })
+    const second = normalizeCodingLiveFailureReplay({ result, events, source })
+
+    expect(second).toEqual(first)
+    expect(result).toEqual(resultBefore)
+    expect(events).toEqual(eventsBefore)
+    expect(source).toEqual(sourceBefore)
+  })
+
   it('normalizes text-only final failures into a bounded replay row', () => {
     const row = normalizeCodingLiveFailureReplay({
       source: {
@@ -78,6 +133,64 @@ describe('coding live failure replay normalizer', () => {
         argsPreview: undefined,
         summary: undefined,
         error: undefined,
+      },
+    ])
+  })
+
+  it('preserves tool history order, names, statuses, summaries, and errors', () => {
+    const row = normalizeCodingLiveFailureReplay({
+      result: makeResult({
+        turns: [
+          {
+            role: 'tool',
+            toolName: 'coding_search_text',
+            toolArgs: { query: 'DEBUG_MODE' },
+            resultOk: true,
+            rawText: JSON.stringify({
+              tool: 'coding_search_text',
+              ok: true,
+              status: 'ok',
+              summary: 'found 2 matches',
+              args: { query: 'DEBUG_MODE' },
+            }),
+          },
+          {
+            role: 'tool',
+            toolName: 'coding_read_archived_context',
+            resultOk: false,
+            rawText: JSON.stringify({
+              tool: 'coding_read_archived_context',
+              ok: false,
+              status: 'exception',
+              summary: 'archive read denied',
+              error: 'ARCHIVE_RECALL_DENIED: artifact was not returned by the latest archive search',
+            }),
+          },
+        ],
+      }),
+    })
+
+    expect(row.failureClass).toBe('archive_recall_finalization')
+    expect(row.toolHistory).toEqual([
+      {
+        index: 0,
+        role: 'tool',
+        toolName: 'coding_search_text',
+        resultOk: true,
+        status: 'ok',
+        argsPreview: '{"query":"DEBUG_MODE"}',
+        summary: 'found 2 matches',
+        error: undefined,
+      },
+      {
+        index: 1,
+        role: 'tool',
+        toolName: 'coding_read_archived_context',
+        resultOk: false,
+        status: 'exception',
+        argsPreview: undefined,
+        summary: 'archive read denied',
+        error: 'ARCHIVE_RECALL_DENIED: artifact was not returned by the latest archive search',
       },
     ])
   })

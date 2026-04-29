@@ -12,6 +12,9 @@ For visual diagrams of the same layer boundaries, see
 For agent-facing code navigation across these layers, see
 `coding-agent-code-index.md`.
 
+For the deterministic live-failure replay contract, see
+`coding-failure-replay-contract.md`.
+
 ## Summary
 
 `computer-use-mcp` should remember enough to keep a coding run stable, recover
@@ -274,6 +277,8 @@ Do not include:
 - schema changes
 
 ### Slice 2: Failure Replay Contract
+
+Status: in progress.
 
 Goal:
 
