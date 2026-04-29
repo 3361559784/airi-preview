@@ -203,6 +203,9 @@ Memory construction source:
 - `coding-memory-construction-plan.md` defines the current coding memory
   construction order and the boundary between coding execution memory and
   project-level `plast-mem` memory.
+- `context-memory-diagram-index.md` is the visual index for the same layers:
+  operational trace, transcript, task memory, run evidence archive, and
+  workspace memory adapter.
 
 What this baseline currently proves:
 

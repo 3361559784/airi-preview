@@ -6,6 +6,9 @@ work for the coding runner.
 The scope is deliberately narrow: coding execution memory. AIRI project-level
 long-term memory belongs to `moeru-ai/plast-mem`, not this package.
 
+For visual diagrams of the same layer boundaries, see
+`context-memory-diagram-index.md`.
+
 ## Summary
 
 `computer-use-mcp` should remember enough to keep a coding run stable, recover
@@ -363,4 +366,3 @@ The coding memory line is healthy when:
 
 If any layer starts acting like system instructions, unreviewed long-term memory,
 or a hidden retrieval oracle, stop and split a follow-up before adding features.
-

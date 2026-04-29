@@ -6,8 +6,9 @@ current-run archive recall, and coding-runner execution memory inside
 
 For the current code-state audit, see
 `coding-context-memory-substrate-audit.md`. For the current construction order,
-see `coding-memory-construction-plan.md`. This file remains the architectural
-contract; the audit file is the branch-local reality check.
+see `coding-memory-construction-plan.md`. For a visual layer map, see
+`context-memory-diagram-index.md`. This file remains the architectural contract;
+the audit file is the branch-local reality check.
 
 This document exists to stop the memory line from degenerating into:
 
