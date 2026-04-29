@@ -44,6 +44,8 @@ The tested contract lives in:
 - `src/planning-orchestration/reconciliation.test.ts`
 - `src/planning-orchestration/lane-router.ts`
 - `src/planning-orchestration/lane-router.test.ts`
+- `src/planning-orchestration/route-projection.ts`
+- `src/planning-orchestration/route-projection.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -58,6 +60,7 @@ The current contract defines:
 - bounded plan-state projection shape
 - deterministic plan evidence reconciliation
 - deterministic plan lane routing classification
+- bounded plan route summary projection shape
 
 ## PlanSpec
 
@@ -181,6 +184,38 @@ Routing is classification, not scheduling. A `routable` result only means the
 step's declared tool surface is internally consistent. It does not select a
 terminal surface, enqueue approval, invoke a tool, or mark evidence complete.
 
+## Route Summary Projection
+
+`projectPlanRouteSummaryForPrompt()` defines a bounded projection for
+deterministic lane-router output. It is a pure function and is not wired into
+runner prompt assembly yet.
+
+The projection block must include:
+
+- a route-summary trust label
+- guidance-not-authority boundary lines
+- a statement that routing classification never executes tools or satisfies
+  completion proof
+- authority metadata from `plan_state_reconciler_decision`
+- route status summaries for blocked and approval-required steps
+- bounded per-step route summaries with lane, route status, routed tools,
+  approval reasons, and blocked reasons
+
+The projection metadata is current-run only:
+
+- `scope: current_run_plan_route_projection`
+- included/character counts
+- projected/omitted route counts
+- projected/omitted blocked and approval-required step counts
+- `authoritySource: plan_state_reconciler_decision`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+Route projection is still not execution. It may explain why a future step is
+`routable`, `requires_approval`, or `blocked`, but it cannot schedule the step,
+call tools, enqueue approval, or override verification gates.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -288,9 +323,13 @@ decides whether the run can report success.
 ## Future Slices
 
 1. `test(computer-use-mcp): define route summary projection contract`
-   - Project bounded route summaries as current-run guidance without executing
-     routed tools.
+   - Landed as pure projection only. It is not wired into runner prompt
+     assembly.
 
-2. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
+2. `feat(computer-use-mcp): project plan route summaries into coding context`
+   - Inject bounded route summaries only when the caller explicitly supplies a
+     routing result.
+
+3. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
    - Consume current-run observations only after route projection and approval
      boundaries are explicit.
