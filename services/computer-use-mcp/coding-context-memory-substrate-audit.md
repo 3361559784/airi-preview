@@ -20,7 +20,8 @@ replay.
 This document is documentation-only. It does not define new runtime behavior.
 For the construction order that follows from this audit, see
 `coding-memory-construction-plan.md`. For diagrams of the same boundaries, see
-`context-memory-diagram-index.md`.
+`context-memory-diagram-index.md`. For agent-facing code navigation, see
+`coding-agent-code-index.md`.
 
 ## Source-of-Truth Matrix
 

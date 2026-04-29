@@ -206,6 +206,9 @@ Memory construction source:
 - `context-memory-diagram-index.md` is the visual index for the same layers:
   operational trace, transcript, task memory, run evidence archive, and
   workspace memory adapter.
+- `coding-agent-code-index.md` is the agent-facing code navigation index for
+  those layers: concept-to-file map, call graph, invariants, test map, and
+  failure routing.
 
 What this baseline currently proves:
 

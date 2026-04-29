@@ -9,6 +9,9 @@ long-term memory belongs to `moeru-ai/plast-mem`, not this package.
 For visual diagrams of the same layer boundaries, see
 `context-memory-diagram-index.md`.
 
+For agent-facing code navigation across these layers, see
+`coding-agent-code-index.md`.
+
 ## Summary
 
 `computer-use-mcp` should remember enough to keep a coding run stable, recover
