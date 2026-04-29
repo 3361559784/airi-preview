@@ -73,6 +73,11 @@ References:
 
 Only reviewed active workspace memory may be exported.
 
+Current implementation anchor:
+
+- `src/workspace-memory/exporters/plast-mem.ts`
+- `src/workspace-memory/exporters/plast-mem.test.ts`
+
 Eligibility:
 
 - `WorkspaceMemoryEntry.status === 'active'`
@@ -214,26 +219,21 @@ The only safe prompt role is reviewed contextual evidence.
 
 ## Future Implementation Slices
 
-1. `test(computer-use-mcp): serialize plast-mem bridge records`
-   - Map active human-verified `WorkspaceMemoryEntry` records into
-     `CodingPlastMemBridgeRecordV1`.
-   - Do not call `plast-mem`.
-
-2. `feat(computer-use-mcp): export reviewed coding memory records`
+1. `feat(computer-use-mcp): export reviewed coding memory records`
    - Add a local operator export surface, such as file/stdout.
    - Keep coding-runner model loop unable to export.
 
-3. `feat(computer-use-mcp): add optional plast-mem ingestion adapter`
+2. `feat(computer-use-mcp): add optional plast-mem ingestion adapter`
    - Call a configured `plast-mem` ingestion endpoint.
    - Keep failures non-fatal to coding runner execution.
 
-4. `feat(computer-use-mcp): inject bounded plast-mem pre-retrieve context`
+3. `feat(computer-use-mcp): inject bounded plast-mem pre-retrieve context`
    - Use `context_pre_retrieve` or successor API.
    - Label returned context as data, not instructions.
    - Keep active-only local workspace memory behavior intact until explicitly
      replaced.
 
-5. `test(computer-use-mcp): cover plast-mem conflict precedence`
+4. `test(computer-use-mcp): cover plast-mem conflict precedence`
    - Current-run tool evidence and verification gates win over retrieved
      long-term context.
 
