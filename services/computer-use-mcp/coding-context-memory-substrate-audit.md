@@ -136,7 +136,9 @@ Current implementation supports:
 - `constraint | fact | pitfall | command | file_note` kinds
 - append-only JSONL storage
 - deduped proposal writes
-- status updates
+- store-level review with reviewer/rationale metadata
+- MCP review request/apply/reject tools with explicit apply token gate
+- local review CLI for human/operator handoff
 - active-only default search
 - optional proposed search for review
 - prompt context only from active search hits
@@ -145,7 +147,7 @@ Current implementation does not define a full promotion workflow:
 
 - no automatic proposal activation
 - no archive-to-workspace promotion
-- no GUI or human review workflow
+- no GUI review surface
 - no stale/conflict cleanup policy
 - no cross-run confidence governance beyond entry fields
 
@@ -158,10 +160,10 @@ runner may propose workspace memory, search active memory, read memory entries,
 and optionally inspect proposed entries for review. It must not promote entries
 inside the model loop.
 
-This section defines the governance contract before implementation. Current
-runtime code has status fields and store-level status updates, but it does not
-yet enforce reviewer identity, audit metadata, transition guards, or a
-promotion UI/tool.
+This section defines the governance contract for the existing store, MCP review
+surface, and local review CLI. Current runtime code enforces reviewer/rationale
+metadata and guarded transitions, but it does not automatically decide which
+entries should be promoted, rejected, cleaned up, or superseded.
 
 Current state transitions:
 
@@ -221,6 +223,82 @@ Archive and task-memory boundaries:
 Correct governance label: workspace memory is rare, reviewed, and high-trust
 retrieved context. It is not a dumping ground for model summaries.
 
+## Workspace Memory Lifecycle Governance
+
+Workspace memory lifecycle is explicit and operator-governed. The model may
+propose entries, but it must not decide durable memory truth by itself.
+
+Lifecycle states:
+
+- `proposed`: candidate workspace knowledge. It is excluded from default prompt
+  injection and default search. It can be listed or searched only through review
+  surfaces or explicit proposed-search options.
+- `pending review request`: governance request over an existing memory entry.
+  A request records the requested decision, requester, rationale, and target
+  snapshot. It does not mutate memory status.
+- `active`: reviewed workspace memory eligible for active-only search and prompt
+  context. Active entries remain contextual data, not instruction authority.
+- `rejected`: reviewed-out or obsolete memory. It is excluded from default
+  search and prompt context. Re-activation requires a fresh review.
+- `stale review request`: a pending request whose target changed before apply.
+  It must not mutate memory. The operator should inspect the current entry and
+  create a fresh request if the decision still applies.
+
+Proposal rules:
+
+- Proposals should be rare and specific: durable constraints, recurring
+  pitfalls, stable commands, file-specific notes, or verified project facts.
+- Proposals must include concrete evidence. A model summary without code, test,
+  command, log, or human-review backing is not enough.
+- One-run observations should usually stay in task memory or eval notes rather
+  than workspace memory.
+- Proposed entries that duplicate active memory should become update/review
+  candidates, not parallel truths.
+
+Review request rules:
+
+- Review requests are allowed only for existing entries.
+- `request-review` is request-only: it may create or return a pending request,
+  but it must not change memory status.
+- Duplicate pending requests for the same `memoryId + decision` should return
+  the existing request.
+- Empty requester/rationale is invalid because review queues without attribution
+  are not governance.
+
+Apply/reject rules:
+
+- Applying a review request requires an external authorization boundary. Current
+  MCP/CLI apply paths use `COMPUTER_USE_WORKSPACE_MEMORY_REVIEW_APPLY_TOKEN` as
+  the local host/client gate.
+- Applying `activate` calls the store review path and sets the memory entry to
+  `active` with `humanVerified: true`.
+- Applying `reject` calls the store review path and sets the memory entry to
+  `rejected` with `humanVerified: false`.
+- Rejecting a review request resolves only the request. It must not mutate the
+  target memory entry.
+- A stale request must be marked stale and must not mutate memory.
+
+Conflict and cleanup rules:
+
+- Conflicting active entries are a governance defect. Keep one active entry and
+  reject or replace the other.
+- Superseded active memory should be rejected with reviewer/rationale metadata,
+  not left active with contradicting newer facts.
+- Stale proposed memory should be rejected rather than silently accumulating.
+- Cleanup is an explicit review action. There is no automatic TTL, decay,
+  confidence demotion, or archive/task-memory promotion in the current design.
+
+Tool-surface boundaries:
+
+- Coding-runner xsai tools may search/read/propose workspace memory, but they
+  must not activate or reject it.
+- MCP review request/apply tools are external host/client surfaces, not model
+  loop tools.
+- The local CLI is an operator wrapper over the same JSONL stores; it is not a
+  new source of truth and does not start an MCP server.
+- `public: false`, hidden descriptors, or tool naming are not authorization
+  boundaries. Real mutation still requires an explicit apply gate.
+
 ## Known Gaps
 
 - Documentation drift: `archived-context/types.ts` and older docs still describe V1 as write-only/no retrieval, while current-run search/read now exist.
@@ -231,8 +309,9 @@ retrieved context. It is not a dumping ground for model summaries.
 - Workspace memory is queried from the initial task goal; mid-run task redirection does not yet have a stronger retrieval strategy.
 - Archive search is current-run substring matching only. This is acceptable for V1, but it is not a general memory retrieval system.
 - Long tasks may still lose specific validation/edit/review evidence under projection pressure unless those evidence classes are explicitly pinned.
-- Workspace memory promotion governance is now documented, but no model-loop
-  promotion tool or UI/governance workflow is implemented.
+- Workspace memory lifecycle governance is now documented and has store/MCP/CLI
+  surfaces, but no GUI review surface or automatic stale/conflict cleanup is
+  implemented.
 
 ## Follow-Up Slices
 

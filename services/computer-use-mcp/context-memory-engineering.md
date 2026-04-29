@@ -345,10 +345,12 @@ Only after the first three phases are stable:
 - define verification threshold
 - define conflict resolution and stale-memory cleanup
 
-Current governance rules are documented in
-`coding-context-memory-substrate-audit.md#workspace-memory-promotion-governance`.
-Treat that section as the current policy source before implementing any
-promotion tool or UI.
+Current governance and lifecycle rules are documented in
+`coding-context-memory-substrate-audit.md#workspace-memory-promotion-governance`
+and
+`coding-context-memory-substrate-audit.md#workspace-memory-lifecycle-governance`.
+Treat those sections as the current policy source before implementing any new
+promotion, cleanup, GUI, or model-visible review surface.
 
 ## Explicit Non-Goals
 

@@ -191,10 +191,10 @@ Current memory status:
 - Archive Memory: close enough for this baseline. It is a current-run historical
   evidence cache, not long-term memory and not instruction authority. Do not add
   auto-promotion from archive into workspace memory.
-- Workspace Memory: governance substrate exists, but the product surface is not
-  complete. Review request/apply flows are groundwork only; CLI/GUI review,
-  stale/conflict lifecycle, and durable user-facing governance remain follow-up
-  work.
+- Workspace Memory: governance substrate and local review CLI exist, but the
+  product surface is not complete. MCP request/apply flows and the CLI are
+  operator-governed surfaces; GUI review, automatic stale/conflict cleanup, and
+  broader user-facing governance remain follow-up work.
 
 What this baseline currently proves:
 
