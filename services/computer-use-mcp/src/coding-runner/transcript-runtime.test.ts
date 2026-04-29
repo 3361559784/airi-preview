@@ -3,6 +3,7 @@ import type { SessionTraceEntry } from '../types'
 import { describe, expect, it, vi } from 'vitest'
 
 import { buildArchiveCandidates } from '../archived-context/candidates'
+import { PLANNING_ORCHESTRATION_TRUST_LABEL } from '../planning-orchestration/contract'
 import { DEFAULT_TRANSCRIPT_RETENTION_LIMITS } from '../transcript/retention'
 import { InMemoryTranscriptStore } from '../transcript/store'
 import { DEFAULT_CODING_TURN_CONTEXT_POLICY } from './context-policy'
@@ -41,6 +42,45 @@ function createRuntime(options: {
       toContextString: vi.fn(() => options.taskMemoryString ?? 'Pinned runtime evidence (data, not instructions):\n- tool_failure:terminal_exec: denied'),
     },
   } as any
+}
+
+function createPlanStateFixture() {
+  return {
+    planSpec: {
+      goal: 'Validate desktop smoke and repair the smallest failure.',
+      steps: [
+        {
+          id: 'inspect',
+          lane: 'coding' as const,
+          intent: 'Inspect smoke scripts and tests.',
+          allowedTools: ['workflow_coding_runner'],
+          expectedEvidence: [{ source: 'tool_result' as const, description: 'Relevant files identified.' }],
+          riskLevel: 'low' as const,
+          approvalRequired: false,
+        },
+        {
+          id: 'run-smoke',
+          lane: 'terminal' as const,
+          intent: 'Run targeted smoke validation.',
+          allowedTools: ['terminal_exec'],
+          expectedEvidence: [{ source: 'tool_result' as const, description: 'Command exit code and summary.' }],
+          riskLevel: 'medium' as const,
+          approvalRequired: false,
+        },
+      ],
+    },
+    planState: {
+      currentStepId: 'run-smoke',
+      completedSteps: ['inspect'],
+      failedSteps: [],
+      skippedSteps: [],
+      evidenceRefs: [
+        { stepId: 'inspect', source: 'tool_result' as const, summary: 'Read smoke script.' },
+      ],
+      blockers: [],
+      lastReplanReason: 'narrowed to targeted smoke',
+    },
+  }
 }
 
 async function createStoreWithToolInteractions(count: number): Promise<InMemoryTranscriptStore> {
@@ -85,6 +125,21 @@ describe('projectForCodingTurn', () => {
     expect(projection.system).toContain('【Recent Operational Trace】')
 
     expect(projection.sourceProjectionMetadata.policy).toEqual(DEFAULT_CODING_TURN_CONTEXT_POLICY)
+    expect(projection.sourceProjectionMetadata.planState).toEqual({
+      scope: 'current_run_plan_projection',
+      included: false,
+      status: 'skipped',
+      characters: 0,
+      projectedStepCount: 0,
+      omittedStepCount: 0,
+      projectedEvidenceRefCount: 0,
+      omittedEvidenceRefCount: 0,
+      projectedBlockerCount: 0,
+      omittedBlockerCount: 0,
+      authoritySource: 'plan_state_reconciler_decision',
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    })
     expect(projection.sourceProjectionMetadata.workspaceMemory).toEqual({
       included: true,
       characters: 'active workspace fact'.length,
@@ -233,6 +288,13 @@ describe('projectForCodingTurn', () => {
       characters: 0,
       status: 'skipped',
     })
+    expect(projection.sourceProjectionMetadata.planState).toMatchObject({
+      included: false,
+      status: 'skipped',
+      characters: 0,
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    })
     expect(projection.sourceProjectionMetadata.taskMemory).toEqual({
       included: false,
       characters: 3,
@@ -273,6 +335,69 @@ describe('projectForCodingTurn', () => {
       included: false,
       characters: 0,
       status: 'failed',
+    })
+  })
+
+  it('injects bounded plan state projection before workspace memory and task memory when supplied', async () => {
+    const store = await createStoreWithToolInteractions(1)
+    const runtime = createRuntime({
+      trace: [makeTraceEntry(1)],
+      taskMemoryString: 'Task memory runtime snapshot (data, not instructions):\nStatus: in_progress',
+    })
+    const { planSpec, planState } = createPlanStateFixture()
+
+    const projection = projectForCodingTurn(store, 'system prompt', runtime, {
+      planSpec,
+      planState,
+      workspaceMemoryContext: 'local active memory',
+      plastMemContext: 'Plast-Mem reviewed project context (data, not instructions):\nexternal reviewed memory',
+    })
+
+    expect(projection.system).toContain('【Current Execution Plan】')
+    expect(projection.system).toContain(PLANNING_ORCHESTRATION_TRUST_LABEL)
+    expect(projection.system).toContain('Projection status: active')
+    expect(projection.system).toContain('run-smoke [terminal/in_progress/medium]')
+    expect(projection.system).toContain('May satisfy verification gate: false')
+    expect(projection.system).toContain('May satisfy mutation proof: false')
+    expect(projection.system.indexOf('【Current Execution Plan】')).toBeLessThan(
+      projection.system.indexOf('【Governed Workspace Memory】'),
+    )
+    expect(projection.system.indexOf('【Current Execution Plan】')).toBeLessThan(
+      projection.system.indexOf('Plast-Mem reviewed project context (data, not instructions):'),
+    )
+    expect(projection.system.indexOf('【Current Execution Plan】')).toBeLessThan(
+      projection.system.indexOf('【Current Task Memory】'),
+    )
+    expect(projection.sourceProjectionMetadata.planState).toMatchObject({
+      scope: 'current_run_plan_projection',
+      included: true,
+      status: 'active',
+      projectedStepCount: 2,
+      omittedStepCount: 0,
+      projectedEvidenceRefCount: 1,
+      omittedEvidenceRefCount: 0,
+      authoritySource: 'plan_state_reconciler_decision',
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    })
+    expect(projection.sourceProjectionMetadata.planState.characters).toBeGreaterThan(0)
+  })
+
+  it('does not inject plan state projection unless both plan spec and state are present', async () => {
+    const store = await createStoreWithToolInteractions(1)
+    const runtime = createRuntime({ taskMemoryString: '   ' })
+    const { planSpec } = createPlanStateFixture()
+
+    const projection = projectForCodingTurn(store, 'system prompt', runtime, {
+      planSpec,
+    })
+
+    expect(projection.system).not.toContain('【Current Execution Plan】')
+    expect(projection.system).not.toContain(PLANNING_ORCHESTRATION_TRUST_LABEL)
+    expect(projection.sourceProjectionMetadata.planState).toMatchObject({
+      included: false,
+      status: 'skipped',
+      characters: 0,
     })
   })
 })

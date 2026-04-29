@@ -40,6 +40,8 @@ The tested contract lives in:
 - `src/planning-orchestration/contract.test.ts`
 - `src/planning-orchestration/projection.ts`
 - `src/planning-orchestration/projection.test.ts`
+- `src/coding-runner/transcript-runtime.ts`
+- `src/coding-runner/transcript-runtime.test.ts`
 
 The current contract defines:
 
@@ -89,7 +91,8 @@ only as runtime guidance.
 ## Plan State Projection
 
 `projectPlanStateForPrompt()` defines the first model-visible projection
-contract. It is a pure function. It is not wired into `coding-runner` yet.
+contract. It is a pure function used by `projectForCodingTurn()` only when the
+caller explicitly supplies both `planSpec` and `planState`.
 
 The projection block must include:
 
@@ -116,6 +119,21 @@ The projection metadata is current-run only:
 Blocked, stale, and superseded plans are still visible as runtime guidance, but
 their state does not become failure proof or completion proof. Tool evidence and
 verification gates remain the authority.
+
+## Coding Runner Context Integration
+
+`projectForCodingTurn()` supports optional current-run plan projection:
+
+- if both `planSpec` and `planState` are present, it injects the bounded
+  projection block into the system context
+- if either value is missing, projection metadata is recorded as `skipped`
+- the plan block is inserted before local Workspace Memory, plast-mem context,
+  and TaskMemory
+- projection metadata is tracked separately from Workspace Memory, plast-mem,
+  TaskMemory, transcript, operational trace, and archive metadata
+
+This is not automatic planning. No runner code generates `PlanSpec` or
+`PlanState` in this slice.
 
 ## Trust Label
 
@@ -176,8 +194,7 @@ decides whether the run can report success.
 - No automatic lane execution.
 - No lane router implementation.
 - No MCP schema or tool-surface change.
-- No coding-runner prompt injection change.
-- No plan-state projection wired into runtime prompt assembly yet.
+- No automatic creation of `PlanSpec` or `PlanState`.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
@@ -186,13 +203,10 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): add current-run plan state projection`
-   - Inject plan guidance only after the projection contract is tested.
-
-2. `test(computer-use-mcp): define plan evidence reconciliation contract`
+1. `test(computer-use-mcp): define plan evidence reconciliation contract`
    - Map expected evidence to current-run tool evidence and verification gate
      decisions.
 
-3. `feat(computer-use-mcp): route plan steps across lanes`
+2. `feat(computer-use-mcp): route plan steps across lanes`
    - Add deterministic routing only after projection and reconciliation are
      stable.
