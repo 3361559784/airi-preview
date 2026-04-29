@@ -354,7 +354,8 @@ Do not include:
 Status: completed for the contract, serialization, local export baseline,
 optional operator-triggered plast-mem ingestion adapter, and bounded optional
 pre-retrieve prompt context. Semantic stale judgment is now defined as a
-pure contract; it does not mutate workspace memory or auto-clean entries.
+pure contract, with local CLI candidate listing; it does not mutate workspace
+memory or auto-clean entries.
 
 Goal:
 

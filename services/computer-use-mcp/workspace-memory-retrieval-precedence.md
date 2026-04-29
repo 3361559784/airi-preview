@@ -99,6 +99,6 @@ current-run tool results can prove mutation or validation evidence.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): list semantic stale workspace memory candidates`
-   - Use the pure semantic stale judgment contract to expose review candidates
-     without mutating memory status.
+1. `feat(computer-use-mcp): add MCP semantic stale candidate listing`
+   - Expose the existing local CLI candidate judgment to external hosts without
+     mutating memory status.

@@ -552,6 +552,90 @@ describe('workspace memory review CLI', () => {
     expect(requestStore.read(String(request.pendingReviewId))?.status).toBe('pending')
   })
 
+  it('lists semantic stale workspace memory candidates without mutating entries', async () => {
+    const store = await createMemoryStore()
+    const related = await store.propose({
+      kind: 'constraint',
+      statement: 'Semantic stale source-file candidates should be visible.',
+      evidence: 'This memory depends on workspace-memory-review.ts.',
+      confidence: 'high',
+      tags: ['semantic-stale'],
+      relatedFiles: ['services/computer-use-mcp/src/bin/workspace-memory-review.ts'],
+    })
+    const active = await store.review({
+      id: related.id,
+      decision: 'activate',
+      reviewer: 'maintainer',
+      rationale: 'Reviewed before semantic stale scan.',
+    })
+    const proposed = await seedProposedMemory('Proposed semantic stale candidate must not be listed.')
+
+    const result = parseStdoutJson(await runCli(baseArgs('list-semantic-stale', [
+      '--changed-files',
+      'services/computer-use-mcp/src/bin/workspace-memory-review.ts',
+      '--now',
+      '2026-04-29T00:00:00.000Z',
+      '--json',
+    ])))
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'ok',
+      trust: 'workspace_memory_semantic_stale_candidate_not_instructions',
+      workspaceKey,
+    })
+    expect(result.semanticStaleCandidates).toEqual([
+      expect.objectContaining({
+        status: 'review_recommended',
+        suggestedAction: 'operator_review',
+        mutatesMemory: false,
+        entry: expect.objectContaining({
+          id: active.id,
+          status: 'active',
+        }),
+        reasons: [
+          expect.objectContaining({
+            reason: 'source_files_changed',
+            severity: 'soft',
+            matchedFiles: ['services/computer-use-mcp/src/bin/workspace-memory-review.ts'],
+          }),
+        ],
+      }),
+    ])
+
+    const afterScan = await createMemoryStore()
+    expect(afterScan.read(active.id)?.status).toBe('active')
+    expect(result.semanticStaleCandidates.map((candidate: any) => candidate.entry.id)).not.toContain(proposed.id)
+  })
+
+  it('lists hard semantic stale candidates from current-run conflicts', async () => {
+    const active = await seedActiveMemory('Current-run evidence conflict should require review before reuse.')
+
+    const result = parseStdoutJson(await runCli(baseArgs('list-semantic-stale', [
+      '--conflict-source',
+      'verification_gate',
+      '--conflict-summary',
+      'Verification gate rejected the remembered command.',
+      '--json',
+    ])))
+
+    expect(result.semanticStaleCandidates).toEqual([
+      expect.objectContaining({
+        status: 'stale_candidate',
+        suggestedAction: 'operator_review_before_reuse',
+        entry: expect.objectContaining({
+          id: active.id,
+        }),
+        reasons: [
+          expect.objectContaining({
+            reason: 'conflicts_with_current_run_evidence',
+            severity: 'hard',
+          }),
+        ],
+      }),
+    ])
+  })
+
   it('requires apply authorization and never echoes wrong approval tokens', async () => {
     const entry = await seedProposedMemory('Apply authorization should not echo secrets.')
     const request = parseStdoutJson(await runCli(baseArgs('request-review', [

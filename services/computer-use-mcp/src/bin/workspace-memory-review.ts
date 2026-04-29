@@ -1,4 +1,5 @@
 import type { CodingPlastMemBridgeRecordV1 } from '../workspace-memory/exporters/plast-mem'
+import type { WorkspaceMemoryCurrentRunEvidenceConflict, WorkspaceMemoryPlastMemInvalidationSignal, WorkspaceMemorySemanticStaleJudgment } from '../workspace-memory/semantic-stale'
 import type {
   WorkspaceMemoryEntry,
   WorkspaceMemoryReviewDecision,
@@ -18,19 +19,23 @@ import { resolveComputerUseConfig } from '../config'
 import { buildCodingPlastMemBridgeRecordV1, CODING_PLAST_MEM_BRIDGE_TRUST_V1 } from '../workspace-memory/exporters/plast-mem'
 import { ingestCodingPlastMemBridgeRecords, PlastMemIngestionError } from '../workspace-memory/exporters/plast-mem-ingestion'
 import { WorkspaceMemoryReviewRequestStore } from '../workspace-memory/review-request-store'
+import { judgeWorkspaceMemorySemanticStale } from '../workspace-memory/semantic-stale'
 import { workspaceKeyFromPath, WorkspaceMemoryStore } from '../workspace-memory/store'
 
 const DEFAULT_LIST_LIMIT = 20
 const MAX_LIST_LIMIT = 50
 const TRUST_BOUNDARY = 'governed_workspace_memory_not_instructions'
 const REVIEW_REQUEST_TRUST_BOUNDARY = 'workspace_memory_review_request_not_instructions'
+const SEMANTIC_STALE_TRUST_BOUNDARY = 'workspace_memory_semantic_stale_candidate_not_instructions'
 const WHITESPACE_RE = /\s+/g
+const CSV_SPLIT_RE = /[,\n]/g
 
 type WorkspaceMemoryCliCommand
   = | 'list'
     | 'read'
     | 'export'
     | 'ingest-plast-mem'
+    | 'list-semantic-stale'
     | 'request-review'
     | 'list-requests'
     | 'list-stale-requests'
@@ -82,6 +87,7 @@ interface CliSuccessPayload {
   records?: CodingPlastMemBridgeRecordV1[]
   requests?: WorkspaceMemoryReviewRequestRecord[]
   staleCandidates?: ReturnType<typeof toStaleCandidateSummary>[]
+  semanticStaleCandidates?: ReturnType<typeof toSemanticStaleCandidateSummary>[]
   request?: WorkspaceMemoryReviewRequestRecord
   pendingReviewId?: string
 }
@@ -94,6 +100,11 @@ interface CliErrorPayload {
   workspaceKey?: string
   error: string
   code?: string
+}
+
+interface WorkspaceMemorySemanticStaleCandidate {
+  entry: WorkspaceMemoryEntry
+  judgment: WorkspaceMemorySemanticStaleJudgment
 }
 
 export async function runWorkspaceMemoryReviewCli(
@@ -124,6 +135,8 @@ async function runCommand(parsed: ParsedArgs, context: CliContext): Promise<void
       return await runExport(parsed.flags, context)
     case 'ingest-plast-mem':
       return await runIngestPlastMem(parsed.flags, context)
+    case 'list-semantic-stale':
+      return await runListSemanticStale(parsed.flags, context)
     case 'request-review':
       return await runRequestReview(parsed.flags, context)
     case 'list-requests':
@@ -248,6 +261,36 @@ async function runIngestPlastMem(flags: Map<string, string | true>, context: Cli
     `Ingested ${result.recordCount} reviewed coding memory record${result.recordCount === 1 ? '' : 's'} into plast-mem.`,
     `Endpoint: ${result.endpoint}`,
     `Accepted: ${result.accepted}`,
+  ])
+}
+
+async function runListSemanticStale(flags: Map<string, string | true>, context: CliContext): Promise<void> {
+  const store = await openWorkspaceMemoryStore(context)
+  const staleOptions = resolveSemanticStaleOptions(flags)
+  const entries = filterWorkspaceMemoryEntries(store.getAll(), {
+    status: 'active',
+    query: optionalString(flags, 'query'),
+  })
+  const semanticStaleCandidates = entries
+    .map(entry => ({
+      entry,
+      judgment: judgeWorkspaceMemorySemanticStale({
+        entry,
+        ...staleOptions,
+      }),
+    }))
+    .filter(candidate => candidate.judgment.status === 'review_recommended' || candidate.judgment.status === 'stale_candidate')
+    .slice(0, parseLimit(optionalString(flags, 'limit')))
+
+  writeSuccess(context, {
+    ok: true,
+    status: 'ok',
+    trust: SEMANTIC_STALE_TRUST_BOUNDARY,
+    workspaceKey: context.workspaceKey,
+    semanticStaleCandidates: semanticStaleCandidates.map(toSemanticStaleCandidateSummary),
+  }, [
+    `Found ${semanticStaleCandidates.length} semantic stale workspace memory candidate${semanticStaleCandidates.length === 1 ? '' : 's'}.`,
+    ...semanticStaleCandidates.map(formatSemanticStaleCandidateLine),
   ])
 }
 
@@ -479,7 +522,7 @@ function parseCommand(command: string): WorkspaceMemoryCliCommand {
 }
 
 function validCommands(): WorkspaceMemoryCliCommand[] {
-  return ['list', 'read', 'export', 'ingest-plast-mem', 'request-review', 'list-requests', 'list-stale-requests', 'read-request', 'apply', 'reject']
+  return ['list', 'read', 'export', 'ingest-plast-mem', 'list-semantic-stale', 'request-review', 'list-requests', 'list-stale-requests', 'read-request', 'apply', 'reject']
 }
 
 function parseWorkspaceMemoryStatus(value: string): WorkspaceMemoryStatus | 'all' {
@@ -568,6 +611,64 @@ function resolvePlastMemIngestionCliOptions(flags: Map<string, string | true>, c
     timeoutMs: parseOptionalPositiveInteger(optionalString(flags, 'timeout-ms'))
       ?? parseOptionalPositiveInteger(context.env.COMPUTER_USE_PLAST_MEM_TIMEOUT_MS)
       ?? config.timeoutMs,
+  }
+}
+
+function resolveSemanticStaleOptions(flags: Map<string, string | true>) {
+  return {
+    now: optionalString(flags, 'now') ?? new Date().toISOString(),
+    changedFiles: parseCsvList(optionalString(flags, 'changed-files') ?? optionalString(flags, 'changed-file')),
+    maxReviewAgeDays: parseOptionalPositiveInteger(optionalString(flags, 'max-review-age-days')),
+    currentRunEvidenceConflicts: parseCurrentRunEvidenceConflicts(flags),
+    plastMemInvalidationSignal: parsePlastMemInvalidationSignal(flags),
+  }
+}
+
+function parseCsvList(value: string | undefined): string[] {
+  if (!value)
+    return []
+  return value
+    .split(CSV_SPLIT_RE)
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+function parseCurrentRunEvidenceConflicts(flags: Map<string, string | true>): WorkspaceMemoryCurrentRunEvidenceConflict[] {
+  const source = optionalString(flags, 'conflict-source')
+  const summary = optionalString(flags, 'conflict-summary')
+  if (!source && !summary)
+    return []
+  if (!source || !summary) {
+    throw new CliError(
+      'Semantic stale conflict input requires both --conflict-source and --conflict-summary',
+      'WORKSPACE_MEMORY_REVIEW_CLI_USAGE',
+    )
+  }
+  if (source !== 'trusted_tool_result' && source !== 'verification_gate' && source !== 'archive_recall' && source !== 'task_memory') {
+    throw new CliError(
+      `Invalid semantic stale conflict source: ${source}`,
+      'WORKSPACE_MEMORY_REVIEW_CLI_USAGE',
+    )
+  }
+  return [{ source, summary }]
+}
+
+function parsePlastMemInvalidationSignal(flags: Map<string, string | true>): WorkspaceMemoryPlastMemInvalidationSignal | undefined {
+  const source = optionalString(flags, 'plast-mem-invalidation-source')
+  const reason = optionalString(flags, 'plast-mem-invalidation-reason')
+  const receivedAt = optionalString(flags, 'plast-mem-invalidation-received-at')
+  if (!source && !reason && !receivedAt)
+    return undefined
+  if (!source || !reason) {
+    throw new CliError(
+      'Plast-mem invalidation input requires both --plast-mem-invalidation-source and --plast-mem-invalidation-reason',
+      'WORKSPACE_MEMORY_REVIEW_CLI_USAGE',
+    )
+  }
+  return {
+    source,
+    reason,
+    ...(receivedAt ? { receivedAt } : {}),
   }
 }
 
@@ -683,6 +784,16 @@ function toStaleCandidateSummary(candidate: WorkspaceMemoryReviewRequestStaleCan
   }
 }
 
+function toSemanticStaleCandidateSummary(candidate: WorkspaceMemorySemanticStaleCandidate) {
+  return {
+    status: candidate.judgment.status,
+    suggestedAction: candidate.judgment.suggestedAction,
+    mutatesMemory: candidate.judgment.mutatesMemory,
+    reasons: candidate.judgment.reasons,
+    entry: toWorkspaceMemorySummary(candidate.entry),
+  }
+}
+
 function formatWorkspaceMemoryLine(entry: WorkspaceMemoryEntry): string {
   return [
     '-',
@@ -709,6 +820,16 @@ function formatStaleCandidateLine(candidate: WorkspaceMemoryReviewRequestStaleCa
     `[${candidate.staleReason}/${candidate.request.decision}]`,
     `memory=${candidate.request.memoryId}`,
     candidate.request.targetStatement,
+  ].join(' ')
+}
+
+function formatSemanticStaleCandidateLine(candidate: WorkspaceMemorySemanticStaleCandidate): string {
+  return [
+    '-',
+    candidate.entry.id,
+    `[${candidate.judgment.status}/${candidate.judgment.suggestedAction}]`,
+    `reasons=${candidate.judgment.reasons.map(reason => reason.reason).join(',')}`,
+    candidate.entry.statement,
   ].join(' ')
 }
 

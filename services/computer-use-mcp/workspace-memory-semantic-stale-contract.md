@@ -34,6 +34,8 @@ The tested contract lives in:
 
 - `src/workspace-memory/semantic-stale.ts`
 - `src/workspace-memory/semantic-stale.test.ts`
+- `src/bin/workspace-memory-review.ts` command `list-semantic-stale`
+- `src/bin/workspace-memory-review.test.ts`
 
 The public function is:
 
@@ -245,12 +247,13 @@ Semantic stale judgment cannot:
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): list semantic stale workspace memory candidates`
-   - Use this pure judgment to list active memory candidates for operator
-     review.
+1. `feat(computer-use-mcp): add MCP semantic stale candidate listing`
+   - Optional external host surface over the same pure judgment.
+   - Must remain read-only.
 
 2. `feat(computer-use-mcp): add semantic stale review CLI`
-   - Expose candidate listing in local operator UX.
+   - Add higher-level operator workflows around request/reject/apply.
+   - Must use existing governed review surfaces.
 
 3. `feat(computer-use-mcp): surface semantic stale candidates in review GUI`
    - GUI should consume existing candidate/review/apply/reject surfaces.
