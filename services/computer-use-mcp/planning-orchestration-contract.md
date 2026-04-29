@@ -48,6 +48,8 @@ The tested contract lives in:
 - `src/planning-orchestration/route-projection.test.ts`
 - `src/planning-orchestration/workflow-handoff.ts`
 - `src/planning-orchestration/workflow-handoff.test.ts`
+- `src/planning-orchestration/workflow-mapping.ts`
+- `src/planning-orchestration/workflow-mapping.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -64,6 +66,7 @@ The current contract defines:
 - deterministic plan lane routing classification
 - bounded plan route summary projection shape
 - deterministic plan route to workflow handoff shape
+- deterministic plan handoff to workflow template mapping shape
 
 ## PlanSpec
 
@@ -253,6 +256,38 @@ This contract intentionally does not build `WorkflowDefinition` or
 and expected evidence, but it does not have executable workflow `params`.
 Inventing params at this layer would turn routing into model guesswork.
 
+## Workflow Mapping Contract
+
+`mapPlanHandoffToWorkflowDefinition()` defines the first deterministic workflow
+template creation boundary. It consumes a ready workflow handoff plus explicit
+caller-provided mappings and returns either a `WorkflowDefinition` or blocked
+mapping problems.
+
+Mapping is allowed only when:
+
+- the handoff status is `ready_for_mapping`
+- every ready step has exactly one explicit mapping
+- no mapping targets unknown, duplicate, approval-required, or blocked steps
+- the mapped `WorkflowStepKind` is compatible with the step's routed candidate
+  tool names
+- the caller provides concrete workflow `params`
+
+The mapping output must include:
+
+- `scope: current_run_plan_workflow_mapping`
+- `status: mapped | blocked`
+- `workflow` only when every ready step is explicitly mapped
+- `problems` for missing, unknown, duplicate, non-ready, or incompatible
+  mappings
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This is still not workflow execution. The mapper may create a static
+`WorkflowDefinition`, but it must not call `executeWorkflow`, enqueue approval,
+dispatch lane tools, infer params from plan prose, or treat a mapped workflow as
+completion proof.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -349,6 +384,7 @@ decides whether the run can report success.
 - No automatic planner model call.
 - No automatic lane execution.
 - No automatic workflow definition creation.
+- No automatic workflow execution.
 - No runtime lane router execution.
 - No MCP schema or tool-surface change.
 - No automatic creation of `PlanSpec` or `PlanState`.
@@ -360,8 +396,9 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): map plan handoff steps to explicit workflow templates`
-   - Add deterministic mapping only for step kinds with complete params.
+1. `feat(computer-use-mcp): execute mapped plan workflows explicitly`
+   - Execute only caller-supplied mapped `WorkflowDefinition` values after
+     approval and host/run boundary decisions are explicit.
 
 2. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
    - Consume current-run observations only after workflow mapping and approval
