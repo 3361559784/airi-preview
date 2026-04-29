@@ -643,6 +643,13 @@ export interface ComputerUseConfig {
   remoteObservationServePort?: number
   remoteObservationToken?: string
   workspaceMemoryReviewApplyToken?: string
+  workspaceMemoryPlastMemIngestion: {
+    enabled: boolean
+    baseUrl?: string
+    conversationId?: string
+    apiKey?: string
+    timeoutMs: number
+  }
   browserDomBridge: BrowserDomBridgeConfig
   binaries: {
     swift: string

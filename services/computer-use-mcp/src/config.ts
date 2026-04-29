@@ -189,6 +189,13 @@ export function resolveComputerUseConfig(): ComputerUseConfig {
     remoteObservationServePort,
     remoteObservationToken: env.COMPUTER_USE_REMOTE_OBSERVATION_TOKEN?.trim() || undefined,
     workspaceMemoryReviewApplyToken: env.COMPUTER_USE_WORKSPACE_MEMORY_REVIEW_APPLY_TOKEN?.trim() || undefined,
+    workspaceMemoryPlastMemIngestion: {
+      enabled: parseBoolean(env.COMPUTER_USE_PLAST_MEM_INGEST_ENABLED, false),
+      baseUrl: env.COMPUTER_USE_PLAST_MEM_BASE_URL?.trim() || undefined,
+      conversationId: env.COMPUTER_USE_PLAST_MEM_CONVERSATION_ID?.trim() || undefined,
+      apiKey: env.COMPUTER_USE_PLAST_MEM_API_KEY?.trim() || undefined,
+      timeoutMs: parseInteger(env.COMPUTER_USE_PLAST_MEM_TIMEOUT_MS, 10_000),
+    },
     browserDomBridge: {
       enabled: parseBoolean(env.COMPUTER_USE_BROWSER_DOM_BRIDGE_ENABLED, true),
       host: env.COMPUTER_USE_BROWSER_DOM_BRIDGE_HOST?.trim() || '127.0.0.1',

@@ -3,8 +3,9 @@
 This document defines the contract boundary between `computer-use-mcp` coding
 memory and `moeru-ai/plast-mem`.
 
-It is a contract, not a runtime integration. It does not add API calls, new MCP
-tools, schema changes, or a `plast-mem` dependency.
+It is a contract plus the current optional local export/ingestion adapter. It
+does not add coding-runner prompt injection, model-visible tools, MCP schema
+changes, direct semantic-memory writes, or a `plast-mem` package dependency.
 
 ## Summary
 
@@ -77,7 +78,9 @@ Current implementation anchor:
 
 - `src/workspace-memory/exporters/plast-mem.ts`
 - `src/workspace-memory/exporters/plast-mem.test.ts`
-- `src/bin/workspace-memory-review.ts` `export`
+- `src/workspace-memory/exporters/plast-mem-ingestion.ts`
+- `src/workspace-memory/exporters/plast-mem-ingestion.test.ts`
+- `src/bin/workspace-memory-review.ts` `export` / `ingest-plast-mem`
 - `src/bin/workspace-memory-review.test.ts`
 
 Eligibility:
@@ -142,17 +145,23 @@ active + humanVerified WorkspaceMemoryEntry
   -> workspace-memory-review export stdout/file
 ```
 
-Preferred future ingestion direction:
+Current optional ingestion path:
 
 ```text
 active + humanVerified WorkspaceMemoryEntry
   -> CodingPlastMemBridgeRecordV1
-  -> plast-mem ingestion/import path
+  -> workspace-memory-review ingest-plast-mem
+  -> configured plast-mem /api/v0/import_batch_messages
   -> plast-mem segmentation/consolidation
   -> plast-mem semantic memory, if consolidation accepts it
 ```
 
-Acceptable future adapter targets:
+The current adapter is disabled unless explicitly configured with a plast-mem
+base URL and conversation id. It may use an optional API key, but it never prints
+or persists the key. Adapter failure is operator-visible and must not affect
+coding-runner task execution.
+
+Acceptable adapter targets:
 
 - `plast-mem` `import_batch_messages`
 - a future reviewed-event ingestion endpoint owned by `plast-mem`
@@ -217,9 +226,9 @@ The only safe prompt role is reviewed contextual evidence.
 
 ## Non-Goals
 
-- No runtime bridge implementation in this slice.
-- No `plast-mem` dependency in `computer-use-mcp`.
-- No HTTP/API call implementation.
+- No coding-runner runtime prompt integration in this slice.
+- No required `plast-mem` dependency in `computer-use-mcp`.
+- No automatic runner-side HTTP/API ingestion.
 - No direct writes to `plast-mem` `semantic_memory`.
 - No BM25, vector, hybrid, or RRF retrieval in `computer-use-mcp`.
 - No Task Memory export.
@@ -233,19 +242,18 @@ The only safe prompt role is reviewed contextual evidence.
 
 ## Future Implementation Slices
 
-1. `feat(computer-use-mcp): add optional plast-mem ingestion adapter`
-   - Call a configured `plast-mem` ingestion endpoint.
-   - Keep failures non-fatal to coding runner execution.
-
-2. `feat(computer-use-mcp): inject bounded plast-mem pre-retrieve context`
+1. `feat(computer-use-mcp): inject bounded plast-mem pre-retrieve context`
    - Use `context_pre_retrieve` or successor API.
    - Label returned context as data, not instructions.
    - Keep active-only local workspace memory behavior intact until explicitly
      replaced.
 
-3. `test(computer-use-mcp): cover plast-mem conflict precedence`
+2. `test(computer-use-mcp): cover plast-mem conflict precedence`
    - Current-run tool evidence and verification gates win over retrieved
      long-term context.
+
+3. `docs/test(computer-use-mcp): define semantic stale judgment contract`
+   - Define stale inputs and outputs before automatic stale decisions.
 
 ## Acceptance Criteria
 

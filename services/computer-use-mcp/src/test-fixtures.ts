@@ -43,6 +43,13 @@ export function createTestConfig(overrides: Partial<ComputerUseConfig> = {}): Co
     remoteObservationServePort: undefined,
     remoteObservationToken: undefined,
     workspaceMemoryReviewApplyToken: undefined,
+    workspaceMemoryPlastMemIngestion: {
+      enabled: false,
+      baseUrl: undefined,
+      conversationId: undefined,
+      apiKey: undefined,
+      timeoutMs: 10_000,
+    },
     browserDomBridge: {
       enabled: true,
       host: '127.0.0.1',
@@ -67,6 +74,13 @@ export function createTestConfig(overrides: Partial<ComputerUseConfig> = {}): Co
     remoteDisplaySize: {
       width: overrides.remoteDisplaySize?.width ?? baseConfig.remoteDisplaySize.width,
       height: overrides.remoteDisplaySize?.height ?? baseConfig.remoteDisplaySize.height,
+    },
+    workspaceMemoryPlastMemIngestion: {
+      enabled: overrides.workspaceMemoryPlastMemIngestion?.enabled ?? baseConfig.workspaceMemoryPlastMemIngestion.enabled,
+      baseUrl: overrides.workspaceMemoryPlastMemIngestion?.baseUrl ?? baseConfig.workspaceMemoryPlastMemIngestion.baseUrl,
+      conversationId: overrides.workspaceMemoryPlastMemIngestion?.conversationId ?? baseConfig.workspaceMemoryPlastMemIngestion.conversationId,
+      apiKey: overrides.workspaceMemoryPlastMemIngestion?.apiKey ?? baseConfig.workspaceMemoryPlastMemIngestion.apiKey,
+      timeoutMs: overrides.workspaceMemoryPlastMemIngestion?.timeoutMs ?? baseConfig.workspaceMemoryPlastMemIngestion.timeoutMs,
     },
     binaries: {
       swift: overrides.binaries?.swift ?? baseConfig.binaries.swift,

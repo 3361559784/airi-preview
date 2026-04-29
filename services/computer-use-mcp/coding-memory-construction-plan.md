@@ -351,7 +351,8 @@ Do not include:
 
 ### Slice 5: Plast-Mem Bridge Design
 
-Status: completed for the contract, serialization, and local export baseline.
+Status: completed for the contract, serialization, local export baseline, and
+optional operator-triggered plast-mem ingestion adapter.
 
 Goal:
 
@@ -365,12 +366,14 @@ Include:
 - trust labels
 - review provenance
 - conflict/stale status handoff
+- optional disabled-by-default ingestion to plast-mem's message import path
 
 Do not include:
 
 - embedded BM25/vector retrieval
 - local project memory graph
 - automatic promotion
+- coding-runner prompt injection
 - GUI unless separately scoped
 
 ## Acceptance Criteria

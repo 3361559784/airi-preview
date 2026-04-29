@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { WorkspaceMemoryReviewRequestStore } from '../workspace-memory/review-request-store'
 import { workspaceKeyFromPath, WorkspaceMemoryStore } from '../workspace-memory/store'
@@ -33,6 +33,7 @@ describe('workspace memory review CLI', () => {
   })
 
   afterEach(async () => {
+    vi.unstubAllGlobals()
     await rm(tmpRoot, { recursive: true, force: true })
   })
 
@@ -313,6 +314,98 @@ describe('workspace memory review CLI', () => {
       code: 'WORKSPACE_MEMORY_REVIEW_CLI_USAGE',
     })
     expect(result.error).toContain('Invalid workspace memory export format: yaml')
+  })
+
+  it('keeps plast-mem ingestion disabled unless explicitly configured', async () => {
+    await seedActiveMemory('Disabled ingestion should not call plast-mem.')
+
+    const result = parseStderrJson(await runCli(baseArgs('ingest-plast-mem', ['--json'])))
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'error',
+      workspaceKey,
+      code: 'WORKSPACE_MEMORY_PLAST_MEM_INGEST_DISABLED',
+    })
+  })
+
+  it('ingests reviewed coding memory records into configured plast-mem import endpoint', async () => {
+    const active = await seedActiveMemory('Plast-mem ingestion should use reviewed records.')
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ accepted: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await runCli(baseArgs('ingest-plast-mem', [
+      '--base-url',
+      'http://localhost:3030/',
+      '--conversation-id',
+      '00000000-0000-4000-8000-000000000001',
+      '--api-key',
+      'plast-secret-token',
+      '--exported-at',
+      '2026-04-29T02:00:00.000Z',
+      '--json',
+    ]))
+    const payload = parseStdoutJson(result)
+
+    expect(payload).toMatchObject({
+      ok: true,
+      status: 'ingested',
+      trust: 'reviewed_coding_context_not_instruction_authority',
+      workspaceKey,
+      endpoint: 'http://localhost:3030/api/v0/import_batch_messages',
+      conversationId: '00000000-0000-4000-8000-000000000001',
+      recordCount: 1,
+      accepted: true,
+    })
+    expect(result.stdout).not.toContain('plast-secret-token')
+    expect(result.stderr).not.toContain('plast-secret-token')
+    expect(fetchMock).toHaveBeenCalledOnce()
+
+    const [endpoint, init] = fetchMock.mock.calls[0]!
+    expect(endpoint).toBe('http://localhost:3030/api/v0/import_batch_messages')
+    expect(init?.headers).toMatchObject({
+      'content-type': 'application/json',
+      'authorization': 'Bearer plast-secret-token',
+    })
+    const body = JSON.parse(String(init?.body)) as Record<string, any>
+    expect(body.conversation_id).toBe('00000000-0000-4000-8000-000000000001')
+    expect(body.messages).toHaveLength(1)
+    expect(body.messages[0]).toMatchObject({
+      role: 'computer-use-mcp',
+      timestamp: Date.parse('2026-04-29T02:00:00.000Z'),
+    })
+    expect(body.messages[0].content).toContain(active.id)
+    expect(body.messages[0].content).toContain('Plast-mem ingestion should use reviewed records.')
+  })
+
+  it('surfaces plast-mem ingestion failures without echoing API keys', async () => {
+    await seedActiveMemory('Ingestion failures should be visible to operators.')
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('upstream unavailable', { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await runCli(baseArgs('ingest-plast-mem', [
+      '--base-url',
+      'http://localhost:3030',
+      '--conversation-id',
+      '00000000-0000-4000-8000-000000000001',
+      '--api-key',
+      'plast-secret-token',
+      '--json',
+    ]))
+    const payload = parseStderrJson(result)
+
+    expect(payload).toMatchObject({
+      ok: false,
+      status: 'error',
+      workspaceKey,
+      code: 'PLAST_MEM_INGESTION_HTTP_ERROR',
+    })
+    expect(payload.error).toContain('HTTP 503')
+    expect(result.stdout).not.toContain('plast-secret-token')
+    expect(result.stderr).not.toContain('plast-secret-token')
   })
 
   it('creates review requests without mutating memory and deduplicates pending memory-id decisions', async () => {

@@ -87,4 +87,22 @@ describe('resolveComputerUseConfig', () => {
 
     expect(config.workspaceMemoryReviewApplyToken).toBe('apply-token')
   })
+
+  it('parses optional plast-mem ingestion settings from env', () => {
+    process.env.COMPUTER_USE_PLAST_MEM_INGEST_ENABLED = '1'
+    process.env.COMPUTER_USE_PLAST_MEM_BASE_URL = 'http://localhost:3000/'
+    process.env.COMPUTER_USE_PLAST_MEM_CONVERSATION_ID = '00000000-0000-4000-8000-000000000001'
+    process.env.COMPUTER_USE_PLAST_MEM_API_KEY = 'plast-token'
+    process.env.COMPUTER_USE_PLAST_MEM_TIMEOUT_MS = '2500'
+
+    const config = resolveComputerUseConfig()
+
+    expect(config.workspaceMemoryPlastMemIngestion).toEqual({
+      enabled: true,
+      baseUrl: 'http://localhost:3000/',
+      conversationId: '00000000-0000-4000-8000-000000000001',
+      apiKey: 'plast-token',
+      timeoutMs: 2500,
+    })
+  })
 })

@@ -12,10 +12,11 @@ import { Buffer } from 'node:buffer'
 import { timingSafeEqual } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { cwd, exit, env as processEnv, stderr as processStderr, stdout as processStdout } from 'node:process'
+import { cwd, exit, argv as processArgv, env as processEnv, stderr as processStderr, stdout as processStdout } from 'node:process'
 
 import { resolveComputerUseConfig } from '../config'
 import { buildCodingPlastMemBridgeRecordV1, CODING_PLAST_MEM_BRIDGE_TRUST_V1 } from '../workspace-memory/exporters/plast-mem'
+import { ingestCodingPlastMemBridgeRecords, PlastMemIngestionError } from '../workspace-memory/exporters/plast-mem-ingestion'
 import { WorkspaceMemoryReviewRequestStore } from '../workspace-memory/review-request-store'
 import { workspaceKeyFromPath, WorkspaceMemoryStore } from '../workspace-memory/store'
 
@@ -29,6 +30,7 @@ type WorkspaceMemoryCliCommand
   = | 'list'
     | 'read'
     | 'export'
+    | 'ingest-plast-mem'
     | 'request-review'
     | 'list-requests'
     | 'list-stale-requests'
@@ -72,6 +74,9 @@ interface CliSuccessPayload {
   format?: WorkspaceMemoryExportFormat
   outputPath?: string
   recordCount?: number
+  endpoint?: string
+  conversationId?: string
+  accepted?: boolean
   entries?: ReturnType<typeof toWorkspaceMemorySummary>[]
   entry?: ReturnType<typeof toWorkspaceMemoryPublicEntry> | ReturnType<typeof toWorkspaceMemorySummary>
   records?: CodingPlastMemBridgeRecordV1[]
@@ -92,7 +97,7 @@ interface CliErrorPayload {
 }
 
 export async function runWorkspaceMemoryReviewCli(
-  rawArgs = process.argv.slice(2),
+  rawArgs = processArgv.slice(2),
   options: WorkspaceMemoryReviewCliOptions = {},
 ): Promise<number> {
   let context: CliContext | undefined
@@ -117,6 +122,8 @@ async function runCommand(parsed: ParsedArgs, context: CliContext): Promise<void
       return await runRead(parsed.flags, context)
     case 'export':
       return await runExport(parsed.flags, context)
+    case 'ingest-plast-mem':
+      return await runIngestPlastMem(parsed.flags, context)
     case 'request-review':
       return await runRequestReview(parsed.flags, context)
     case 'list-requests':
@@ -214,6 +221,34 @@ async function runExport(flags: Map<string, string | true>, context: CliContext)
   }
 
   context.stdout.write(exportBody)
+}
+
+async function runIngestPlastMem(flags: Map<string, string | true>, context: CliContext): Promise<void> {
+  const store = await openWorkspaceMemoryStore(context)
+  const exportedAt = optionalString(flags, 'exported-at') ?? new Date().toISOString()
+  const entries = filterWorkspaceMemoryEntries(store.getAll(), {
+    status: 'active',
+    query: optionalString(flags, 'query'),
+    limit: parseOptionalExportLimit(optionalString(flags, 'limit')),
+  })
+  const records = entries.map(entry => buildCodingPlastMemBridgeRecordV1({ entry, exportedAt }))
+  const options = resolvePlastMemIngestionCliOptions(flags, context)
+  const result = await ingestCodingPlastMemBridgeRecords(records, options)
+
+  writeSuccess(context, {
+    ok: true,
+    status: result.status,
+    trust: CODING_PLAST_MEM_BRIDGE_TRUST_V1,
+    workspaceKey: context.workspaceKey,
+    endpoint: result.endpoint,
+    conversationId: result.conversationId,
+    recordCount: result.recordCount,
+    accepted: result.accepted,
+  }, [
+    `Ingested ${result.recordCount} reviewed coding memory record${result.recordCount === 1 ? '' : 's'} into plast-mem.`,
+    `Endpoint: ${result.endpoint}`,
+    `Accepted: ${result.accepted}`,
+  ])
 }
 
 async function runRequestReview(flags: Map<string, string | true>, context: CliContext): Promise<void> {
@@ -444,7 +479,7 @@ function parseCommand(command: string): WorkspaceMemoryCliCommand {
 }
 
 function validCommands(): WorkspaceMemoryCliCommand[] {
-  return ['list', 'read', 'export', 'request-review', 'list-requests', 'list-stale-requests', 'read-request', 'apply', 'reject']
+  return ['list', 'read', 'export', 'ingest-plast-mem', 'request-review', 'list-requests', 'list-stale-requests', 'read-request', 'apply', 'reject']
 }
 
 function parseWorkspaceMemoryStatus(value: string): WorkspaceMemoryStatus | 'all' {
@@ -489,6 +524,53 @@ function parseOptionalExportLimit(value: string | undefined): number | undefined
   return Math.max(1, parsed)
 }
 
+function parseOptionalPositiveInteger(value: string | undefined): number | undefined {
+  if (value === undefined)
+    return undefined
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0)
+    return undefined
+  return parsed
+}
+
+function resolvePlastMemIngestionCliOptions(flags: Map<string, string | true>, context: CliContext) {
+  const config = resolveComputerUseConfig().workspaceMemoryPlastMemIngestion
+  const explicitBaseUrl = optionalString(flags, 'base-url')
+  const explicitConversationId = optionalString(flags, 'conversation-id')
+  const envEnabled = isTruthy(context.env.COMPUTER_USE_PLAST_MEM_INGEST_ENABLED)
+
+  if (!explicitBaseUrl && !explicitConversationId && !envEnabled) {
+    throw new CliError(
+      'Plast-mem ingestion is disabled: pass --base-url and --conversation-id or set COMPUTER_USE_PLAST_MEM_INGEST_ENABLED=1 with COMPUTER_USE_PLAST_MEM_BASE_URL and COMPUTER_USE_PLAST_MEM_CONVERSATION_ID',
+      'WORKSPACE_MEMORY_PLAST_MEM_INGEST_DISABLED',
+    )
+  }
+
+  const baseUrl = explicitBaseUrl ?? context.env.COMPUTER_USE_PLAST_MEM_BASE_URL?.trim() ?? config.baseUrl
+  const conversationId = explicitConversationId ?? context.env.COMPUTER_USE_PLAST_MEM_CONVERSATION_ID?.trim() ?? config.conversationId
+  if (!baseUrl) {
+    throw new CliError(
+      'Plast-mem ingestion is disabled: missing --base-url or COMPUTER_USE_PLAST_MEM_BASE_URL',
+      'WORKSPACE_MEMORY_PLAST_MEM_INGEST_DISABLED',
+    )
+  }
+  if (!conversationId) {
+    throw new CliError(
+      'Plast-mem ingestion is disabled: missing --conversation-id or COMPUTER_USE_PLAST_MEM_CONVERSATION_ID',
+      'WORKSPACE_MEMORY_PLAST_MEM_INGEST_DISABLED',
+    )
+  }
+
+  return {
+    baseUrl,
+    conversationId,
+    apiKey: optionalString(flags, 'api-key') ?? context.env.COMPUTER_USE_PLAST_MEM_API_KEY?.trim() ?? config.apiKey,
+    timeoutMs: parseOptionalPositiveInteger(optionalString(flags, 'timeout-ms'))
+      ?? parseOptionalPositiveInteger(context.env.COMPUTER_USE_PLAST_MEM_TIMEOUT_MS)
+      ?? config.timeoutMs,
+  }
+}
+
 function authorizeReviewApply(flags: Map<string, string | true>, context: CliContext): void {
   const configuredToken = context.env.COMPUTER_USE_WORKSPACE_MEMORY_REVIEW_APPLY_TOKEN?.trim()
   if (!configuredToken) {
@@ -502,6 +584,10 @@ function authorizeReviewApply(flags: Map<string, string | true>, context: CliCon
   if (!constantTimeStringEqual(configuredToken, approvalToken)) {
     throw new CliError('Workspace memory review apply denied: invalid approval token', 'WORKSPACE_MEMORY_REVIEW_APPLY_DENIED')
   }
+}
+
+function isTruthy(value: string | undefined): boolean {
+  return ['1', 'true', 'yes', 'on'].includes(value?.trim().toLowerCase() ?? '')
 }
 
 function constantTimeStringEqual(expected: string, actual: string): boolean {
@@ -674,6 +760,8 @@ function writeError(context: CliContext | undefined, message: string, code?: str
 function getCliErrorCode(error: unknown): string | undefined {
   if (error instanceof CliError)
     return error.code
+  if (error instanceof PlastMemIngestionError)
+    return error.code
   if (error instanceof Error && error.message.includes('target is stale'))
     return 'WORKSPACE_MEMORY_REVIEW_TARGET_STALE'
   return undefined
@@ -691,7 +779,5 @@ class CliError extends Error {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const exitCode = await runWorkspaceMemoryReviewCli()
-  exit(exitCode)
-}
+if (import.meta.url === `file://${processArgv[1]}`)
+  void runWorkspaceMemoryReviewCli().then(exit)

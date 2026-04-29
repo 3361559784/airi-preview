@@ -30,8 +30,8 @@ tests win.
 | Run Evidence Archive | `src/archived-context/candidates.ts`, `src/archived-context/store.ts`, `src/archived-context/serializer.ts`, `src/archived-context/types.ts` | `src/archived-context/archived-context.test.ts` | Current-run historical evidence. Search-before-read and latest-search-only. |
 | Workspace Memory Adapter | `src/workspace-memory/store.ts`, `src/workspace-memory/review-request-store.ts`, `src/workspace-memory/types.ts` | `src/workspace-memory/workspace-memory.test.ts`, `src/workspace-memory/review-request-store.test.ts` | Governed local adapter and future `plast-mem` bridge. Not AIRI long-term memory. |
 | Workspace memory MCP surface | `src/server/register-workspace-memory.ts`, `src/server/tool-descriptors/workspace-memory.ts` | `src/server/register-workspace-memory.test.ts`, `src/server/register-tool-search.test.ts` | External request/apply/read surfaces. Apply/reject require explicit gate. |
-| Workspace memory CLI | `src/bin/workspace-memory-review.ts`, `src/bin/smoke-workspace-memory-review.ts` | `src/bin/workspace-memory-review.test.ts` | Local operator workflow over the same append-only stores, including reviewed plast-mem bridge record export. |
-| Plast-Mem bridge export | `coding-plast-mem-bridge-contract.md`, `src/workspace-memory/exporters/plast-mem.ts`, `src/workspace-memory/types.ts` | `src/workspace-memory/exporters/plast-mem.test.ts` | Pure serializer for active human-verified workspace memory. No runtime integration yet. |
+| Workspace memory CLI | `src/bin/workspace-memory-review.ts`, `src/bin/smoke-workspace-memory-review.ts` | `src/bin/workspace-memory-review.test.ts` | Local operator workflow over the same append-only stores, including reviewed plast-mem bridge record export and optional ingestion. |
+| Plast-Mem bridge export/ingestion | `coding-plast-mem-bridge-contract.md`, `src/workspace-memory/exporters/plast-mem.ts`, `src/workspace-memory/exporters/plast-mem-ingestion.ts`, `src/workspace-memory/types.ts` | `src/workspace-memory/exporters/plast-mem.test.ts`, `src/workspace-memory/exporters/plast-mem-ingestion.test.ts` | Serializer plus optional `import_batch_messages` adapter for active human-verified workspace memory. No runner prompt integration. |
 | Workspace memory retrieval precedence | `workspace-memory-retrieval-precedence.md`, `src/workspace-memory/retrieval-precedence.ts` | `src/workspace-memory/retrieval-precedence.test.ts` | Deterministic conflict order for current-run evidence, local active memory, and future plast-mem retrieval. No runtime injection yet. |
 | Coding primitives and proof gates | `src/coding/primitives.ts`, `src/coding/verification-gate.ts`, `src/coding/shell-command-guard.ts`, `src/coding/report-completion-evidence.ts` | `src/coding/primitives.test.ts`, `src/coding/verification-gate.test.ts`, `src/coding/shell-command-guard.test.ts` | Defines coding operations, validation proof, report evidence, and shell misuse constraints. |
 | Live failure replay | `src/coding-runner/live-failure-replay.ts`, `src/coding-runner/live-failure-corpus.ts`, `src/bin/coding-eval-replay.ts` | `src/coding-runner/live-failure-replay.test.ts`, `src/coding-runner/live-failure-corpus.test.ts`, `src/bin/coding-eval-replay.test.ts` | Maps live provider failures into deterministic replay/classification. |
@@ -213,8 +213,8 @@ flowchart LR
 - model can propose, not activate
 - apply/reject requires external governance
 - local adapter must not grow into a second long-term memory system
-- future `plast-mem` export is contract-only until serialization/export tests
-  exist
+- future `plast-mem` retrieval remains contract-only; export and optional
+  ingestion are local operator surfaces, not runner prompt integration
 
 ### Coding Runner
 
@@ -241,7 +241,7 @@ flowchart LR
 | `src/archived-context/*` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/archived-context/archived-context.test.ts` |
 | `src/workspace-memory/*` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/workspace-memory.test.ts src/workspace-memory/review-request-store.test.ts src/server/register-workspace-memory.test.ts` |
 | `src/bin/workspace-memory-review.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/bin/workspace-memory-review.test.ts src/workspace-memory/workspace-memory.test.ts src/workspace-memory/review-request-store.test.ts` |
-| `src/workspace-memory/exporters/plast-mem.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/exporters/plast-mem.test.ts src/workspace-memory/workspace-memory.test.ts src/workspace-memory/review-request-store.test.ts` |
+| `src/workspace-memory/exporters/plast-mem.ts` or `src/workspace-memory/exporters/plast-mem-ingestion.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/exporters/plast-mem.test.ts src/workspace-memory/exporters/plast-mem-ingestion.test.ts src/workspace-memory/workspace-memory.test.ts src/workspace-memory/review-request-store.test.ts` |
 | `src/workspace-memory/retrieval-precedence.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/workspace-memory/retrieval-precedence.test.ts` |
 | `src/coding-runner/transcript-runtime.ts` or `src/coding-runner/context-policy.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/coding-runner/transcript-runtime.test.ts src/coding-runner/context-policy.test.ts src/coding-runner/coding-runner.test.ts` |
 | `src/coding-runner/service.ts` | `pnpm -F @proj-airi/computer-use-mcp exec vitest run src/coding-runner/coding-runner.test.ts` |
