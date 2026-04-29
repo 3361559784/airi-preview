@@ -18,6 +18,9 @@ For the deterministic live-failure replay contract, see
 For the bounded current-run evidence pin contract, see
 `coding-evidence-pin-contract.md`.
 
+For the future project-level long-term memory bridge boundary, see
+`coding-plast-mem-bridge-contract.md`.
+
 ## Summary
 
 `computer-use-mcp` should remember enough to keep a coding run stable, recover
@@ -344,6 +347,8 @@ Do not include:
 - workspace memory promotion
 
 ### Slice 5: Plast-Mem Bridge Design
+
+Status: completed for the contract-only baseline.
 
 Goal:
 

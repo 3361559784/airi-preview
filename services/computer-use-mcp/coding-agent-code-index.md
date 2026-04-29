@@ -31,6 +31,7 @@ tests win.
 | Workspace Memory Adapter | `src/workspace-memory/store.ts`, `src/workspace-memory/review-request-store.ts`, `src/workspace-memory/types.ts` | `src/workspace-memory/workspace-memory.test.ts`, `src/workspace-memory/review-request-store.test.ts` | Governed local adapter and future `plast-mem` bridge. Not AIRI long-term memory. |
 | Workspace memory MCP surface | `src/server/register-workspace-memory.ts`, `src/server/tool-descriptors/workspace-memory.ts` | `src/server/register-workspace-memory.test.ts`, `src/server/register-tool-search.test.ts` | External request/apply/read surfaces. Apply/reject require explicit gate. |
 | Workspace memory CLI | `src/bin/workspace-memory-review.ts`, `src/bin/smoke-workspace-memory-review.ts` | `src/bin/workspace-memory-review.test.ts` | Local operator workflow over the same append-only stores. |
+| Plast-Mem bridge contract | `coding-plast-mem-bridge-contract.md`, `src/workspace-memory/types.ts` | Future serialization tests only | Contract-only bridge boundary. No runtime integration yet. |
 | Coding primitives and proof gates | `src/coding/primitives.ts`, `src/coding/verification-gate.ts`, `src/coding/shell-command-guard.ts`, `src/coding/report-completion-evidence.ts` | `src/coding/primitives.test.ts`, `src/coding/verification-gate.test.ts`, `src/coding/shell-command-guard.test.ts` | Defines coding operations, validation proof, report evidence, and shell misuse constraints. |
 | Live failure replay | `src/coding-runner/live-failure-replay.ts`, `src/coding-runner/live-failure-corpus.ts`, `src/bin/coding-eval-replay.ts` | `src/coding-runner/live-failure-replay.test.ts`, `src/coding-runner/live-failure-corpus.test.ts`, `src/bin/coding-eval-replay.test.ts` | Maps live provider failures into deterministic replay/classification. |
 
@@ -41,6 +42,10 @@ Failure replay contract:
 Evidence pin contract:
 
 - `coding-evidence-pin-contract.md`
+
+Plast-Mem bridge contract:
+
+- `coding-plast-mem-bridge-contract.md`
 
 ## Runner Context Call Flow
 
@@ -203,6 +208,8 @@ flowchart LR
 - model can propose, not activate
 - apply/reject requires external governance
 - local adapter must not grow into a second long-term memory system
+- future `plast-mem` export is contract-only until serialization/export tests
+  exist
 
 ### Coding Runner
 

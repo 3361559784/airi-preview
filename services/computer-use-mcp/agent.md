@@ -213,6 +213,9 @@ Memory construction source:
   deterministic replay/classification evidence before runtime fixes.
 - `coding-evidence-pin-contract.md` defines Task Memory evidence pin prefixes,
   limits, and the non-pin recovery boundary for text-only final correction.
+- `coding-plast-mem-bridge-contract.md` defines the contract-only boundary
+  between reviewed coding workspace memory and future `plast-mem` ingestion /
+  retrieval. It is not a runtime integration.
 
 What this baseline currently proves:
 
