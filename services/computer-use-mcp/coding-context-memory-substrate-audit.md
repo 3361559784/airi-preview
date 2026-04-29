@@ -18,6 +18,8 @@ current-run archive recall, validation/report evidence retention, and failure
 replay.
 
 This document is documentation-only. It does not define new runtime behavior.
+For the construction order that follows from this audit, see
+`coding-memory-construction-plan.md`.
 
 ## Source-of-Truth Matrix
 

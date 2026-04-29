@@ -198,6 +198,12 @@ Current memory status:
   operator-governed surfaces; GUI review, automatic stale/conflict cleanup, and
   any `plast-mem` bridge remain follow-up work.
 
+Memory construction source:
+
+- `coding-memory-construction-plan.md` defines the current coding memory
+  construction order and the boundary between coding execution memory and
+  project-level `plast-mem` memory.
+
 What this baseline currently proves:
 
 - Existing-file edit loop can read/search, patch, validate, and report
