@@ -183,6 +183,9 @@ Current implementation supports:
 - optional proposed search for review
 - prompt context only from active search hits
 
+For local active workspace memory versus future `plast-mem` retrieval
+precedence, see `workspace-memory-retrieval-precedence.md`.
+
 Current implementation does not define a full promotion workflow:
 
 - no automatic proposal activation

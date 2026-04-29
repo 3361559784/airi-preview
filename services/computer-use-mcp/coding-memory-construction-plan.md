@@ -21,6 +21,9 @@ For the bounded current-run evidence pin contract, see
 For the future project-level long-term memory bridge boundary, see
 `coding-plast-mem-bridge-contract.md`.
 
+For local workspace memory versus future `plast-mem` retrieval precedence, see
+`workspace-memory-retrieval-precedence.md`.
+
 ## Summary
 
 `computer-use-mcp` should remember enough to keep a coding run stable, recover

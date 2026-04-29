@@ -195,6 +195,10 @@ If `plast-mem` retrieval conflicts with current-run evidence, current-run
 evidence wins. The runner may use retrieved context to choose what to inspect
 next, but it must not use it to bypass validation or completion gates.
 
+For the deterministic source ordering contract, see
+`workspace-memory-retrieval-precedence.md` and
+`src/workspace-memory/retrieval-precedence.ts`.
+
 ## Authority Boundary
 
 Bridge output and retrieval output are never system authority.
