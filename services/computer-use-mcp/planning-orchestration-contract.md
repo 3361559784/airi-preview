@@ -42,6 +42,8 @@ The tested contract lives in:
 - `src/planning-orchestration/projection.test.ts`
 - `src/planning-orchestration/reconciliation.ts`
 - `src/planning-orchestration/reconciliation.test.ts`
+- `src/planning-orchestration/lane-router.ts`
+- `src/planning-orchestration/lane-router.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -55,6 +57,7 @@ The current contract defines:
 - planning guidance prompt label
 - bounded plan-state projection shape
 - deterministic plan evidence reconciliation
+- deterministic plan lane routing classification
 
 ## PlanSpec
 
@@ -137,6 +140,46 @@ verification gates remain the authority.
 
 This is not automatic planning. No runner code generates `PlanSpec` or
 `PlanState` in this slice.
+
+## Lane Routing Classification
+
+`routePlanStep()` and `routePlanSpec()` define a deterministic routing
+classification contract. They are pure functions and are not wired into runner
+execution yet.
+
+Inputs:
+
+- `PlanSpecStep`
+- the existing `ToolDescriptorRegistry` or equivalent descriptor lookup
+
+The router maps `PlanSpecStep.lane + allowedTools` to descriptor metadata and
+returns:
+
+- `scope: current_run_plan_lane_routing`
+- `status: routable | requires_approval | blocked`
+- requested and routed tool names
+- descriptor-derived approval reasons
+- blocked reasons for unknown, non-public, empty, human-tool, or cross-lane
+  tool requests
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+Plan lanes intentionally map onto descriptor lanes instead of duplicating MCP
+registration logic:
+
+- `coding`: `coding` tools plus explicit coding workflow entrypoints
+- `desktop`: `desktop`, `display`, and `accessibility` tools, excluding
+  legacy `terminal_*` tools
+- `browser_dom`: only `browser_dom` tools
+- `terminal`: `pty` tools plus legacy `terminal_exec` and
+  `terminal_reset_state`
+- `human`: no tools; always approval-required unless blocked for declaring
+  tools
+
+Routing is classification, not scheduling. A `routable` result only means the
+step's declared tool surface is internally consistent. It does not select a
+terminal surface, enqueue approval, invoke a tool, or mark evidence complete.
 
 ## Evidence Reconciliation
 
@@ -233,7 +276,7 @@ decides whether the run can report success.
 
 - No automatic planner model call.
 - No automatic lane execution.
-- No lane router implementation.
+- No runtime lane router execution.
 - No MCP schema or tool-surface change.
 - No automatic creation of `PlanSpec` or `PlanState`.
 - No Workspace Memory write.
@@ -244,10 +287,10 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): route plan steps across lanes`
-   - Add deterministic routing only after projection and reconciliation are
-     stable.
+1. `test(computer-use-mcp): define route summary projection contract`
+   - Project bounded route summaries as current-run guidance without executing
+     routed tools.
 
 2. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
-   - Consume current-run observations only after lane routing and approval
+   - Consume current-run observations only after route projection and approval
      boundaries are explicit.
