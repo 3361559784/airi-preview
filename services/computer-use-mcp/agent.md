@@ -290,6 +290,82 @@ Stop rules:
 - Do not mix Chika CLI handoff, provider eval docs, and runtime/test fixes in
   one commit.
 
+## Future Mimic Baseline / Training Line
+
+Last reviewed: 2026-04-30
+Workstream: future-mimic-baseline
+
+This is not an active model-training line. Treat it as an experiment boundary
+for future `computer-use-mcp` low-level UI operation mimic work.
+
+Read first:
+
+- `mimic-baseline-training-boundary.md`
+
+Current decision:
+
+- Do not start full VLA or embodied model training now.
+- Do not wire any learned model into runtime execution yet.
+- Do not mix this with chafa, CLI, desktop UI pet work, terminal coding
+  workflows, or product desktop UI polish.
+- The first acceptable slice is a bounded mimic baseline / learned candidate
+  scorer experiment.
+
+Architecture boundary:
+
+- LLM / planner owns language understanding and structured current subgoal
+  decomposition.
+- Observer owns screenshots, DOM / AX candidates, current URL/title/app/window
+  state, and previous action trace.
+- Mimic policy owns only `observation -> candidate/action ranking`.
+- Runtime gate, approval discipline, action executor, and verification gate own
+  execution authority.
+- Learned ranking is advisory data only; it cannot satisfy proof gates or
+  authorize tool execution.
+
+Allowed first-slice work:
+
+- trace schema
+- observation / candidate / action data structures
+- deterministic browser/macOS UI trace collector
+- human click/type/scroll to candidate-id mapping
+- dataset builder
+- offline eval script
+- README for `services/computer-use-mcp/experiments/mimic-baseline/`
+
+First offline eval metrics:
+
+- Top-1 candidate match
+- Top-3 candidate match
+- action type accuracy
+- no-target / unmapped-action rate
+- unsafe / invalid candidate rate when applicable
+
+Promotion gates before training/runtime discussion:
+
+- at least 50 to 100 clean traces
+- stable candidate extraction for deterministic demo tasks
+- explainable low unmapped-action rate
+- repeatable offline top-k metrics
+- measured unsafe / invalid candidate cases
+- unchanged approval and verification boundaries
+
+Reminder rule:
+
+- If this line is reopened, remind the user and worker that the current decision
+  is still "mimic baseline first, no full training, no runtime execution" unless
+  the promotion gates above have actually been met.
+- If the user wants a calendar reminder, ask for an exact date/time; this file
+  only records a handoff reminder, not an automation.
+
+Chika boundary:
+
+- Chika may work on collector, schema, deterministic browser demo task,
+  candidate mapping, dataset builder, and offline eval.
+- Chika should not own full VLA training, runtime execution integration, Windows
+  support, terminal workflow integration, model deployment, or product claims in
+  the first slice.
+
 ## Terminal Lane v2: What Is Already Landed
 
 ### 1. Terminal surface model exists
