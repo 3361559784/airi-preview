@@ -46,6 +46,8 @@ The tested contract lives in:
 - `src/planning-orchestration/lane-router.test.ts`
 - `src/planning-orchestration/route-projection.ts`
 - `src/planning-orchestration/route-projection.test.ts`
+- `src/planning-orchestration/workflow-handoff.ts`
+- `src/planning-orchestration/workflow-handoff.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -61,6 +63,7 @@ The current contract defines:
 - deterministic plan evidence reconciliation
 - deterministic plan lane routing classification
 - bounded plan route summary projection shape
+- deterministic plan route to workflow handoff shape
 
 ## PlanSpec
 
@@ -220,6 +223,36 @@ Route projection is still not execution. It may explain why a future step is
 `routable`, `requires_approval`, or `blocked`, but it cannot schedule the step,
 call tools, enqueue approval, or override verification gates.
 
+## Workflow Handoff Contract
+
+`buildPlanRouteWorkflowHandoff()` defines the first route-to-workflow handoff
+shape. It consumes `PlanSpec` plus deterministic route classification and
+returns a current-run handoff summary for future workflow mapping.
+
+The handoff can classify steps as:
+
+- `ready_for_mapping`
+- `requires_approval`
+- `blocked`
+
+The handoff must include:
+
+- `scope: current_run_plan_route_workflow_handoff`
+- ready, approval-required, and blocked step ids
+- per-step route status, candidate tool names, approval reasons, and blocked
+  reasons
+- consistency errors for missing, extra, or duplicate route rows
+- `workflowMappingRequired: true` on each handoff step
+- `mayExecute: false`
+- `mayCreateWorkflowDefinition: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This contract intentionally does not build `WorkflowDefinition` or
+`WorkflowStepTemplate` objects. `PlanSpecStep` has lane, intent, allowed tools,
+and expected evidence, but it does not have executable workflow `params`.
+Inventing params at this layer would turn routing into model guesswork.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -315,6 +348,7 @@ decides whether the run can report success.
 
 - No automatic planner model call.
 - No automatic lane execution.
+- No automatic workflow definition creation.
 - No runtime lane router execution.
 - No MCP schema or tool-surface change.
 - No automatic creation of `PlanSpec` or `PlanState`.
@@ -326,6 +360,9 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
-   - Consume current-run observations only after route projection and approval
+1. `feat(computer-use-mcp): map plan handoff steps to explicit workflow templates`
+   - Add deterministic mapping only for step kinds with complete params.
+
+2. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
+   - Consume current-run observations only after workflow mapping and approval
      boundaries are explicit.
