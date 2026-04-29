@@ -2,6 +2,7 @@ import type {
   WorkspaceMemoryEntry,
   WorkspaceMemoryReviewDecision,
   WorkspaceMemoryReviewRequestRecord,
+  WorkspaceMemoryReviewRequestStaleCandidate,
   WorkspaceMemoryReviewRequestStatus,
   WorkspaceMemoryStatus,
 } from '../workspace-memory/types'
@@ -26,6 +27,7 @@ type WorkspaceMemoryCliCommand
     | 'read'
     | 'request-review'
     | 'list-requests'
+    | 'list-stale-requests'
     | 'read-request'
     | 'apply'
     | 'reject'
@@ -66,6 +68,7 @@ interface CliSuccessPayload {
   entries?: ReturnType<typeof toWorkspaceMemorySummary>[]
   entry?: ReturnType<typeof toWorkspaceMemoryPublicEntry> | ReturnType<typeof toWorkspaceMemorySummary>
   requests?: WorkspaceMemoryReviewRequestRecord[]
+  staleCandidates?: ReturnType<typeof toStaleCandidateSummary>[]
   request?: WorkspaceMemoryReviewRequestRecord
   pendingReviewId?: string
 }
@@ -106,6 +109,8 @@ async function runCommand(parsed: ParsedArgs, context: CliContext): Promise<void
       return await runRequestReview(parsed.flags, context)
     case 'list-requests':
       return await runListRequests(parsed.flags, context)
+    case 'list-stale-requests':
+      return await runListStaleRequests(parsed.flags, context)
     case 'read-request':
       return await runReadRequest(parsed.flags, context)
     case 'apply':
@@ -207,6 +212,28 @@ async function runListRequests(flags: Map<string, string | true>, context: CliCo
   }, [
     `Found ${requests.length} workspace memory review request${requests.length === 1 ? '' : 's'} (status=${statusFilter}).`,
     ...requests.map(request => formatReviewRequestLine(request)),
+  ])
+}
+
+async function runListStaleRequests(flags: Map<string, string | true>, context: CliContext): Promise<void> {
+  const memoryStore = await openWorkspaceMemoryStore(context)
+  const requestStore = await openWorkspaceMemoryReviewRequestStore(context)
+  const staleCandidates = await requestStore.listStaleCandidates((request) => {
+    return memoryStore.read(request.memoryId)
+  }, {
+    query: optionalString(flags, 'query'),
+    limit: parseLimit(optionalString(flags, 'limit')),
+  })
+
+  writeSuccess(context, {
+    ok: true,
+    status: 'ok',
+    trust: REVIEW_REQUEST_TRUST_BOUNDARY,
+    workspaceKey: context.workspaceKey,
+    staleCandidates: staleCandidates.map(toStaleCandidateSummary),
+  }, [
+    `Found ${staleCandidates.length} stale workspace memory review request candidate${staleCandidates.length === 1 ? '' : 's'}.`,
+    ...staleCandidates.map(formatStaleCandidateLine),
   ])
 }
 
@@ -365,7 +392,7 @@ function parseCommand(command: string): WorkspaceMemoryCliCommand {
 }
 
 function validCommands(): WorkspaceMemoryCliCommand[] {
-  return ['list', 'read', 'request-review', 'list-requests', 'read-request', 'apply', 'reject']
+  return ['list', 'read', 'request-review', 'list-requests', 'list-stale-requests', 'read-request', 'apply', 'reject']
 }
 
 function parseWorkspaceMemoryStatus(value: string): WorkspaceMemoryStatus | 'all' {
@@ -478,6 +505,21 @@ function toWorkspaceMemoryPublicEntry(entry: WorkspaceMemoryEntry) {
   }
 }
 
+function toStaleCandidateSummary(candidate: WorkspaceMemoryReviewRequestStaleCandidate) {
+  return {
+    staleReason: candidate.staleReason,
+    request: candidate.request,
+    currentEntry: candidate.currentEntry
+      ? {
+          id: candidate.currentEntry.id,
+          status: candidate.currentEntry.status,
+          updatedAt: candidate.currentEntry.updatedAt,
+          statement: candidate.currentEntry.statement,
+        }
+      : undefined,
+  }
+}
+
 function formatWorkspaceMemoryLine(entry: WorkspaceMemoryEntry): string {
   return [
     '-',
@@ -494,6 +536,16 @@ function formatReviewRequestLine(request: WorkspaceMemoryReviewRequestRecord): s
     `[${request.status}/${request.decision}]`,
     `memory=${request.memoryId}`,
     request.targetStatement,
+  ].join(' ')
+}
+
+function formatStaleCandidateLine(candidate: WorkspaceMemoryReviewRequestStaleCandidate): string {
+  return [
+    '-',
+    candidate.request.id,
+    `[${candidate.staleReason}/${candidate.request.decision}]`,
+    `memory=${candidate.request.memoryId}`,
+    candidate.request.targetStatement,
   ].join(' ')
 }
 

@@ -403,6 +403,117 @@ describe('workspaceMemoryReviewRequestStore', () => {
     expect(await jsonlRows(requestPath)).toHaveLength(2)
   })
 
+  it('lists stale pending candidates without resolving requests or appending JSONL rows', async () => {
+    const memoryStore = await createMemoryStore()
+    const requestStore = await createRequestStore()
+    const missingTarget = await memoryStore.propose({
+      kind: 'fact',
+      statement: 'Missing target should be listed as stale.',
+      evidence: 'The current entry lookup returns nothing.',
+    })
+    const statusChangedTarget = await memoryStore.propose({
+      kind: 'constraint',
+      statement: 'Status changed target should be listed as stale.',
+      evidence: 'The current entry status differs from the snapshot.',
+    })
+    const updatedAtChangedTarget = await memoryStore.propose({
+      kind: 'command',
+      statement: 'Updated-at changed target should be listed as stale.',
+      evidence: 'The current entry timestamp differs from the snapshot.',
+    })
+    const statementChangedTarget = await memoryStore.propose({
+      kind: 'pitfall',
+      statement: 'Statement changed target should be listed as stale.',
+      evidence: 'The current entry statement differs from the snapshot.',
+    })
+    const resolvedTarget = await memoryStore.propose({
+      kind: 'file_note',
+      statement: 'Resolved requests are ignored by stale candidate listing.',
+      evidence: 'Only pending requests are stale candidates.',
+    })
+
+    const missingRequest = await requestStore.request({
+      memoryId: missingTarget.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Check missing target.',
+    }, memoryStore.read(missingTarget.id))
+    const statusRequest = await requestStore.request({
+      memoryId: statusChangedTarget.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Check status mismatch.',
+    }, memoryStore.read(statusChangedTarget.id))
+    const updatedAtRequest = await requestStore.request({
+      memoryId: updatedAtChangedTarget.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Check updated-at mismatch.',
+    }, memoryStore.read(updatedAtChangedTarget.id))
+    const statementRequest = await requestStore.request({
+      memoryId: statementChangedTarget.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Check statement mismatch.',
+    }, memoryStore.read(statementChangedTarget.id))
+    const resolvedRequest = await requestStore.request({
+      memoryId: resolvedTarget.id,
+      decision: 'activate',
+      requester: 'maintainer',
+      rationale: 'Resolved request should be ignored.',
+    }, memoryStore.read(resolvedTarget.id))
+    await requestStore.reject(resolvedRequest.id, {
+      approver: 'host',
+      rationale: 'Resolve this request before stale scan.',
+    })
+    const requestRowsBefore = await jsonlRows(requestPath)
+
+    const candidates = await requestStore.listStaleCandidates((request) => {
+      if (request.id === missingRequest.id)
+        return undefined
+      if (request.id === statusRequest.id)
+        return { ...statusChangedTarget, status: 'active' }
+      if (request.id === updatedAtRequest.id)
+        return { ...updatedAtChangedTarget, updatedAt: '9999-01-01T00:00:00.000Z' }
+      if (request.id === statementRequest.id)
+        return { ...statementChangedTarget, statement: 'Statement changed after review request.' }
+      if (request.id === resolvedRequest.id)
+        return { ...resolvedTarget, status: 'active' }
+      return memoryStore.read(request.memoryId)
+    })
+
+    expect(candidates.map(candidate => ({
+      id: candidate.request.id,
+      staleReason: candidate.staleReason,
+    }))).toEqual(expect.arrayContaining([
+      { id: missingRequest.id, staleReason: 'target_missing' },
+      { id: statusRequest.id, staleReason: 'target_status_changed' },
+      { id: updatedAtRequest.id, staleReason: 'target_updated_at_changed' },
+      { id: statementRequest.id, staleReason: 'target_statement_changed' },
+    ]))
+    expect(candidates).toHaveLength(4)
+    expect(candidates.map(candidate => candidate.request.id)).not.toContain(resolvedRequest.id)
+    expect(requestStore.read(missingRequest.id)?.status).toBe('pending')
+    expect(requestStore.read(statusRequest.id)?.status).toBe('pending')
+    expect(requestStore.read(updatedAtRequest.id)?.status).toBe('pending')
+    expect(requestStore.read(statementRequest.id)?.status).toBe('pending')
+    expect(await jsonlRows(requestPath)).toHaveLength(requestRowsBefore.length)
+
+    await expect(requestStore.listStaleCandidates((request) => {
+      if (request.id === statementRequest.id)
+        return { ...statementChangedTarget, statement: 'Statement changed after review request.' }
+      return memoryStore.read(request.memoryId)
+    }, {
+      query: 'statement changed after',
+      limit: 1,
+    })).resolves.toEqual([
+      expect.objectContaining({
+        request: expect.objectContaining({ id: statementRequest.id }),
+        staleReason: 'target_statement_changed',
+      }),
+    ])
+  })
+
   it('marks missing target requests stale without mutating memory', async () => {
     const memoryStore = await createMemoryStore()
     const requestStore = await createRequestStore()

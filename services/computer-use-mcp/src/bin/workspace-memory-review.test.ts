@@ -273,6 +273,53 @@ describe('workspace memory review CLI', () => {
     ])
   })
 
+  it('lists stale pending review request candidates without resolving them', async () => {
+    const entry = await seedProposedMemory('Stale candidate should be visible before apply.')
+    const request = parseStdoutJson(await runCli(baseArgs('request-review', [
+      '--id',
+      entry.id,
+      '--decision',
+      'activate',
+      '--requester',
+      'chika',
+      '--rationale',
+      'Activate if the snapshot remains current.',
+      '--json',
+    ])))
+    const memoryStore = await createMemoryStore()
+    await memoryStore.review({
+      id: entry.id,
+      decision: 'reject',
+      reviewer: 'maintainer',
+      rationale: 'Changed after the review request was created.',
+    })
+
+    const stale = parseStdoutJson(await runCli(baseArgs('list-stale-requests', ['--json'])))
+    expect(stale).toMatchObject({
+      ok: true,
+      status: 'ok',
+      trust: 'workspace_memory_review_request_not_instructions',
+      workspaceKey,
+    })
+    expect(stale.staleCandidates).toEqual([
+      expect.objectContaining({
+        staleReason: 'target_status_changed',
+        request: expect.objectContaining({
+          id: request.pendingReviewId,
+          status: 'pending',
+          memoryId: entry.id,
+        }),
+        currentEntry: expect.objectContaining({
+          id: entry.id,
+          status: 'rejected',
+        }),
+      }),
+    ])
+
+    const requestStore = await createRequestStore()
+    expect(requestStore.read(String(request.pendingReviewId))?.status).toBe('pending')
+  })
+
   it('requires apply authorization and never echoes wrong approval tokens', async () => {
     const entry = await seedProposedMemory('Apply authorization should not echo secrets.')
     const request = parseStdoutJson(await runCli(baseArgs('request-review', [

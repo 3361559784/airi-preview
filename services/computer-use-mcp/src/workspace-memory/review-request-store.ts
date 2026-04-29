@@ -3,6 +3,8 @@ import type {
   WorkspaceMemoryReviewRequestInput,
   WorkspaceMemoryReviewRequestRecord,
   WorkspaceMemoryReviewRequestResolutionInput,
+  WorkspaceMemoryReviewRequestStaleCandidate,
+  WorkspaceMemoryReviewRequestStaleReason,
 } from './types'
 
 import { randomUUID } from 'node:crypto'
@@ -113,6 +115,42 @@ export class WorkspaceMemoryReviewRequestStore {
       .filter(request => !normalizedQuery || reviewRequestHaystack(request).includes(normalizedQuery))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, limit)
+  }
+
+  async listStaleCandidates(
+    getCurrentEntry: (request: WorkspaceMemoryReviewRequestRecord) => WorkspaceMemoryEntry | undefined | Promise<WorkspaceMemoryEntry | undefined>,
+    options: { query?: string, limit?: number } = {},
+  ): Promise<WorkspaceMemoryReviewRequestStaleCandidate[]> {
+    this.assertInitialized()
+    const normalizedQuery = normalizeText(options.query ?? '').toLowerCase()
+    const limit = normalizeLimit(options.limit)
+    const candidates: WorkspaceMemoryReviewRequestStaleCandidate[] = []
+
+    const pendingRequests = this.requests
+      .filter(request => request.status === 'pending')
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+
+    for (const request of pendingRequests) {
+      const currentEntry = await getCurrentEntry(request)
+      const staleReason = getTargetStaleErrorCode(request, currentEntry)
+      if (!staleReason)
+        continue
+
+      const candidate: WorkspaceMemoryReviewRequestStaleCandidate = {
+        request,
+        staleReason,
+        currentEntry,
+      }
+
+      if (normalizedQuery && !staleCandidateHaystack(candidate).includes(normalizedQuery))
+        continue
+
+      candidates.push(candidate)
+      if (candidates.length >= limit)
+        break
+    }
+
+    return candidates
   }
 
   read(id: string): WorkspaceMemoryReviewRequestRecord | undefined {
@@ -357,7 +395,7 @@ function reviewRequestHaystack(request: WorkspaceMemoryReviewRequestRecord): str
 function getTargetStaleErrorCode(
   request: WorkspaceMemoryReviewRequestRecord,
   currentEntry: WorkspaceMemoryEntry | undefined,
-): string | undefined {
+): WorkspaceMemoryReviewRequestStaleReason | undefined {
   if (!currentEntry)
     return 'target_missing'
   if (currentEntry.status !== request.targetStatus)
@@ -367,6 +405,18 @@ function getTargetStaleErrorCode(
   if (currentEntry.statement !== request.targetStatement)
     return 'target_statement_changed'
   return undefined
+}
+
+function staleCandidateHaystack(candidate: WorkspaceMemoryReviewRequestStaleCandidate): string {
+  const currentEntry = candidate.currentEntry
+  return [
+    reviewRequestHaystack(candidate.request),
+    candidate.staleReason,
+    currentEntry?.id,
+    currentEntry?.status,
+    currentEntry?.updatedAt,
+    currentEntry?.statement,
+  ].filter(Boolean).join('\n').toLowerCase()
 }
 
 function getNodeErrorCode(error: unknown): string | undefined {

@@ -243,6 +243,9 @@ Lifecycle states:
 - `stale review request`: a pending request whose target changed before apply.
   It must not mutate memory. The operator should inspect the current entry and
   create a fresh request if the decision still applies.
+- The local review CLI can list stale pending request candidates with
+  `list-stale-requests`. This is a read-only preflight view; it does not mark
+  requests stale and does not clean them up.
 
 Proposal rules:
 
