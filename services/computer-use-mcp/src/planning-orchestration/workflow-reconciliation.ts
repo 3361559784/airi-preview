@@ -1,9 +1,11 @@
 import type { PlanSpec, PlanState } from './contract'
 import type { PlanEvidenceObservation, PlanEvidenceReconciliationResult } from './reconciliation'
+import type { PlanStateTransitionProposal } from './state-transition'
 import type { PlanWorkflowExecutionResult } from './workflow-execution'
 import type { PlanWorkflowMappingResult } from './workflow-mapping'
 
 import { reconcilePlanEvidence } from './reconciliation'
+import { derivePlanStateTransitionProposal } from './state-transition'
 import { buildPlanEvidenceObservationsFromWorkflowExecution } from './workflow-evidence'
 
 export type PlanWorkflowReconciliationSkippedReason
@@ -16,6 +18,7 @@ export interface PlanWorkflowReconciliationResult {
   skippedReason?: PlanWorkflowReconciliationSkippedReason
   evidenceObservations: PlanEvidenceObservation[]
   reconciliation?: PlanEvidenceReconciliationResult
+  transitionProposal?: PlanStateTransitionProposal
   maySatisfyVerificationGate: false
   maySatisfyMutationProof: false
 }
@@ -58,14 +61,21 @@ export function reconcilePlanWorkflowExecution(params: {
     }
   }
 
+  const reconciliation = reconcilePlanEvidence({
+    plan: params.plan,
+    state: params.state,
+    observations: evidenceObservations,
+  })
+
   return {
     scope: 'current_run_plan_workflow_reconciliation',
     included: true,
     evidenceObservations,
-    reconciliation: reconcilePlanEvidence({
+    reconciliation,
+    transitionProposal: derivePlanStateTransitionProposal({
       plan: params.plan,
       state: params.state,
-      observations: evidenceObservations,
+      reconciliation,
     }),
     maySatisfyVerificationGate: false,
     maySatisfyMutationProof: false,

@@ -2469,6 +2469,14 @@ describe('codingRunner', () => {
         maySatisfyVerificationGate: false,
         maySatisfyMutationProof: false,
       },
+      transitionProposal: {
+        scope: 'current_run_plan_state_transition_proposal',
+        proposal: 'ready_for_final_verification',
+        mayMutatePlanState: false,
+        mayExecute: false,
+        maySatisfyVerificationGate: false,
+        maySatisfyMutationProof: false,
+      },
     })
     expect(result.backend.workflowReconciliation.evidenceObservations).toEqual([
       expect.objectContaining({

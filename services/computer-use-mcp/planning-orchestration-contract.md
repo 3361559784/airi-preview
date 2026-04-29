@@ -56,6 +56,8 @@ The tested contract lives in:
 - `src/planning-orchestration/workflow-evidence.test.ts`
 - `src/planning-orchestration/workflow-reconciliation.ts`
 - `src/planning-orchestration/workflow-reconciliation.test.ts`
+- `src/planning-orchestration/state-transition.ts`
+- `src/planning-orchestration/state-transition.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -76,6 +78,7 @@ The current contract defines:
 - explicit mapped workflow execution boundary
 - deterministic workflow execution to plan evidence observation bridge
 - explicit workflow execution reconciliation summary
+- deterministic plan state transition proposal shape
 
 ## PlanSpec
 
@@ -378,6 +381,36 @@ metadata:
 This summary can say a plan is ready for final verification. It still cannot
 mark the coding runner completed, satisfy mutation proof, or bypass
 `coding_report_status`.
+
+## Plan State Transition Proposal
+
+`derivePlanStateTransitionProposal()` converts a reconciliation result into a
+host-readable proposal for current-run plan state changes.
+
+Proposal kinds are:
+
+- `advance_step`
+- `mark_failed`
+- `require_approval`
+- `replan`
+- `ready_for_final_verification`
+- `noop`
+
+The output may include proposed operations such as `append_completed_step`,
+`set_current_step`, `append_failed_step`, or `append_blocker`, but those
+operations are descriptive only. This contract does not mutate `PlanState`.
+
+Every transition proposal must include:
+
+- `scope: current_run_plan_state_transition_proposal`
+- `mayMutatePlanState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+Workflow reconciliation includes a transition proposal only when explicit
+`PlanState` was supplied and workflow execution produced step results. The host
+or a future orchestration entrypoint must decide whether to apply it.
 
 ## Evidence Reconciliation
 

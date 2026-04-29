@@ -111,6 +111,13 @@ describe('plan workflow reconciliation contract', () => {
     })
     expect(result.reconciliation?.maySatisfyVerificationGate).toBe(false)
     expect(result.reconciliation?.maySatisfyMutationProof).toBe(false)
+    expect(result.transitionProposal).toMatchObject({
+      scope: 'current_run_plan_state_transition_proposal',
+      proposal: 'ready_for_final_verification',
+      mayMutatePlanState: false,
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    })
   })
 
   it('returns skipped reconciliation metadata when no plan state is supplied', async () => {
@@ -131,6 +138,7 @@ describe('plan workflow reconciliation contract', () => {
     })
     expect(result.evidenceObservations).toHaveLength(1)
     expect(result.reconciliation).toBeUndefined()
+    expect(result.transitionProposal).toBeUndefined()
   })
 
   it('maps failed workflow evidence into a replan decision', async () => {
@@ -159,6 +167,11 @@ describe('plan workflow reconciliation contract', () => {
       decision: 'replan',
       reason: 'Plan evidence failed for step: read-file',
       stepId: 'read-file',
+    })
+    expect(result.transitionProposal).toMatchObject({
+      proposal: 'mark_failed',
+      stepId: 'read-file',
+      mayMutatePlanState: false,
     })
   })
 
@@ -215,5 +228,6 @@ describe('plan workflow reconciliation contract', () => {
       maySatisfyMutationProof: false,
     })
     expect(result.reconciliation).toBeUndefined()
+    expect(result.transitionProposal).toBeUndefined()
   })
 })
