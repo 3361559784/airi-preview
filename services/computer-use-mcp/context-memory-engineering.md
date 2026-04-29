@@ -1,6 +1,8 @@
 # Context Memory Engineering
 
-Engineering contract for long-running coding context, transcript compaction, archived context, and future long-term memory inside `computer-use-mcp`.
+Engineering contract for long-running coding context, transcript compaction,
+current-run archive recall, and coding-runner execution memory inside
+`computer-use-mcp`.
 
 For the current code-state audit and follow-up slice order, see
 `coding-context-memory-substrate-audit.md`. This file remains the architectural
@@ -13,7 +15,32 @@ This document exists to stop the memory line from degenerating into:
 - accidental pollution of `TaskMemory`
 - a fake "memory system" that is really just prompt stuffing with extra steps
 
-The goal here is not to make the system sound smart. The goal is to make long-running coding work lose less context without corrupting the execution substrate.
+The goal here is not to build AIRI's project-level long-term memory. That belongs
+to the dedicated memory layer (`moeru-ai/plast-mem`). The goal here is to make
+long-running coding work lose less context without corrupting the execution
+substrate.
+
+## Scope Boundary
+
+`computer-use-mcp` owns coding-runner execution memory:
+
+- current-run task recovery state
+- transcript projection and compression
+- current-run archive recall
+- validation/report evidence retention
+- deterministic replay of coding live failures
+
+It does not own project-level long-term memory:
+
+- no episodic/semantic consolidation
+- no BM25/vector/RRF memory retrieval
+- no FSRS decay/review loop
+- no cross-run project knowledge graph
+- no user/persona/project memory authority
+
+If a future AIRI integration needs durable project memory, the coding runner
+should treat `plast-mem` as the long-term memory service boundary rather than
+growing a second long-term memory system in this package.
 
 ## Current Facts
 
@@ -33,7 +60,8 @@ These are already true in the codebase:
 - `src/coding-runner/*`
   - an experimental transcript-driven coding runner exists, but it is not the mainline coding entry yet.
 
-This means the project already has enough substrate to build a proper memory line, but it does not yet have a completed long-term memory subsystem.
+This means the package has enough substrate for coding execution memory. It
+should not try to become the completed long-term memory subsystem.
 
 ## Problem Statement
 
@@ -50,7 +78,8 @@ So the required behavior is:
 - prompt context can be compacted
 - compacted material must remain recoverable
 - recovery must be targeted, not full-folder scavenging
-- long-term memory must be governed, not auto-promoted from every summary
+- any durable project memory handoff must be governed and routed through the
+  long-term memory boundary, not auto-promoted from every summary
 
 ## Core Principles
 
@@ -202,16 +231,19 @@ Minimum metadata:
 
 This layer is recallable archive, not high-trust memory.
 
-### Layer 3: Workspace Memory
+### Layer 3: Workspace Memory Adapter Boundary
 
-This is the true long-term memory layer.
+This is no longer treated as the true long-term memory layer for AIRI. Project
+memory belongs to `plast-mem`. Inside `computer-use-mcp`, workspace memory is a
+governed local substrate and future adapter boundary for coding-specific
+retrieved context.
 
 Role:
 
-- durable project constraints
-- stable repo facts
-- repeated build/tooling rules
-- verified recurring pitfalls
+- coding-specific retrieved context
+- operator-reviewed local notes while the external memory boundary is not wired
+- compatibility surface for search/read/propose workflows
+- possible future bridge into `plast-mem`
 
 Examples:
 
@@ -226,7 +258,8 @@ Rules:
 - no automatic promotion from ordinary compaction
 - should require repeated evidence, explicit verification, or human confirmation
 
-If this layer is implemented too early, it will fill with false confidence garbage.
+If this layer is expanded as a standalone long-term memory system, it will
+duplicate `plast-mem` and fill with false confidence garbage.
 
 ## Retrieval Model
 
@@ -337,7 +370,7 @@ Do not build:
 
 - broad automatic replay of archived context
 
-### Phase 4: Workspace Memory Governance
+### Phase 4: Workspace Memory Adapter Governance
 
 Only after the first three phases are stable:
 
@@ -345,12 +378,13 @@ Only after the first three phases are stable:
 - define verification threshold
 - define conflict resolution and stale-memory cleanup
 
-Current governance and lifecycle rules are documented in
-`coding-context-memory-substrate-audit.md#workspace-memory-promotion-governance`
+Current local governance and lifecycle rules are documented in
+`coding-context-memory-substrate-audit.md#workspace-memory-adapter-governance`
 and
-`coding-context-memory-substrate-audit.md#workspace-memory-lifecycle-governance`.
+`coding-context-memory-substrate-audit.md#workspace-memory-adapter-lifecycle-governance`.
 Treat those sections as the current policy source before implementing any new
-promotion, cleanup, GUI, or model-visible review surface.
+promotion, cleanup, GUI, model-visible review surface, or external memory
+adapter.
 
 ## Explicit Non-Goals
 
@@ -373,13 +407,14 @@ This line is successful when all of the following are true:
 - archived context is retrievable by narrow, explicit queries
 - `TaskMemory` remains clean and task-scoped
 - transcript truth source remains append-only
-- workspace memory remains rare, governed, and high-trust
+- any workspace-memory-like context remains rare, governed, high-trust, and
+  ready to hand off to `plast-mem` instead of becoming a parallel memory system
 
 If those are not true, the system is still doing primitive compression, not memory engineering.
 
 ## Practical Call
 
-The next engineering move is not GUI and not full long-term memory.
+The next engineering move is not GUI and not package-local long-term memory.
 
 The next move is:
 

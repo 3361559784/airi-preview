@@ -191,10 +191,12 @@ Current memory status:
 - Archive Memory: closed for this baseline. It is a current-run historical
   evidence cache, not long-term memory and not instruction authority. Do not
   add auto-promotion from archive into workspace memory.
-- Workspace Memory: governance substrate and local review CLI exist, but the
-  product surface is not complete. MCP request/apply flows and the CLI are
+- Workspace Memory Adapter: local governance substrate and review CLI exist, but
+  this is not AIRI's project-level long-term memory system. Project memory
+  belongs to `plast-mem`; this package should keep workspace-memory-like context
+  as a governed coding adapter boundary. MCP request/apply flows and the CLI are
   operator-governed surfaces; GUI review, automatic stale/conflict cleanup, and
-  broader user-facing governance remain follow-up work.
+  any `plast-mem` bridge remain follow-up work.
 
 What this baseline currently proves:
 

@@ -11,6 +11,12 @@ discipline. The next stage is not another live eval and not a new memory system.
 The next stage is to keep the current context layers from impersonating each
 other.
 
+Project-level long-term memory belongs outside this package. `plast-mem` owns
+the episodic/semantic memory direction. `computer-use-mcp` owns coding-runner
+execution memory: current-run recovery state, transcript compression,
+current-run archive recall, validation/report evidence retention, and failure
+replay.
+
 This document is documentation-only. It does not define new runtime behavior.
 
 ## Source-of-Truth Matrix
@@ -21,7 +27,7 @@ This document is documentation-only. It does not define new runtime behavior.
 | Transcript | `src/transcript/store.ts` + `transcript.jsonl` | one runner session | yes, for LLM messages | via `projectTranscript()` | runner append only | no direct model tool | no promotion |
 | Task memory | `src/task-memory/*` | current task/run | ephemeral task snapshot | system header through `projectContext()` | runner recovery/update helpers | no direct search | never long-term |
 | Archived context | `src/archived-context/*` | current run archive | recoverable context cache | not auto-injected; searchable/readable by tools | projection/archive writer only | `coding_search_archived_context`, `coding_read_archived_context` | not workspace memory |
-| Workspace memory | `src/workspace-memory/*` | governed workspace facts | governed memory entries | active entries only, through workspace-memory context | proposal tool exists | `coding_search_workspace_memory`, `coding_read_workspace_memory`, `coding_propose_workspace_memory` | explicit status required |
+| Workspace memory adapter | `src/workspace-memory/*` | governed coding context | local governed entries / future external memory boundary | active entries only, through workspace-memory context | proposal tool exists | `coding_search_workspace_memory`, `coding_read_workspace_memory`, `coding_propose_workspace_memory` | explicit status required; not AIRI long-term memory |
 
 ## Current Runner Context Flow
 
@@ -56,7 +62,7 @@ Important consequences:
 - Projection is disposable request assembly, not truth.
 - Operational trace and transcript history are separate inputs.
 - Archived context is written during projection pressure but is not automatically replayed into the next prompt.
-- Workspace memory is queried once from the task goal for the runner prompt header; proposed entries are not injected by default.
+- Local workspace memory is queried once from the task goal for the runner prompt header; proposed entries are not injected by default.
 
 ## Current Budget And Pruning Controls
 
@@ -155,9 +161,10 @@ Archive can be reopened only when a repeated live failure maps directly to
 current-run recall quality, search noise, or archive-denial finalization. It
 should not be reopened just to make the memory system feel more complete.
 
-## Current Workspace Memory Status
+## Current Workspace Memory Adapter Status
 
-Workspace memory exists but governance is not complete.
+Workspace memory exists, but it is now treated as a local governed adapter
+surface, not AIRI's project-level long-term memory system.
 
 Current implementation supports:
 
@@ -180,14 +187,15 @@ Current implementation does not define a full promotion workflow:
 - no stale/conflict cleanup policy
 - no cross-run confidence governance beyond entry fields
 
-Correct label: governed memory substrate, not completed long-term memory.
+Correct label: governed coding-memory adapter substrate, not completed
+project-level memory.
 
-## Workspace Memory Promotion Governance
+## Workspace Memory Adapter Governance
 
-Workspace memory promotion is an out-of-band governance action. The coding
-runner may propose workspace memory, search active memory, read memory entries,
-and optionally inspect proposed entries for review. It must not promote entries
-inside the model loop.
+Workspace memory promotion is an out-of-band governance action for the local
+adapter substrate. The coding runner may propose workspace memory, search active
+memory, read memory entries, and optionally inspect proposed entries for review.
+It must not promote entries inside the model loop.
 
 This section defines the governance contract for the existing store, MCP review
 surface, and local review CLI. Current runtime code enforces reviewer/rationale
@@ -250,7 +258,8 @@ Archive and task-memory boundaries:
   still requires external review
 
 Correct governance label: workspace memory is rare, reviewed, and high-trust
-retrieved context. It is not a dumping ground for model summaries.
+retrieved coding context. It is not a dumping ground for model summaries and not
+a replacement for `plast-mem`.
 
 ## Task Memory Closeout
 
@@ -282,10 +291,10 @@ Task Memory can be reopened only for a repeated recovery failure with a narrow
 evidence class. It should not absorb workspace-memory governance, archive
 recall, or planner state.
 
-## Workspace Memory Lifecycle Governance
+## Workspace Memory Adapter Lifecycle Governance
 
-Workspace memory lifecycle is explicit and operator-governed. The model may
-propose entries, but it must not decide durable memory truth by itself.
+Workspace memory adapter lifecycle is explicit and operator-governed. The model
+may propose entries, but it must not decide durable memory truth by itself.
 
 Lifecycle states:
 
@@ -360,17 +369,19 @@ Tool-surface boundaries:
   new source of truth and does not start an MCP server.
 - `public: false`, hidden descriptors, or tool naming are not authorization
   boundaries. Real mutation still requires an explicit apply gate.
+- If AIRI needs real project-level memory, this adapter should bridge to
+  `plast-mem` rather than grow independent episodic/semantic retrieval.
 
 ## Known Gaps
 
 - Projection constants are duplicated between transcript projection, archive candidate generation, and runner runtime wiring.
 - Operational trace projection and transcript projection are composed in `projectForCodingTurn()`, but budget ownership is not yet one explicit policy.
-- Workspace memory is queried from the initial task goal; mid-run task redirection does not yet have a stronger retrieval strategy.
+- Local workspace memory is queried from the initial task goal; mid-run task redirection does not yet have a stronger retrieval strategy.
 - Archive search is current-run substring matching only. This is acceptable for V1, but it is not a general memory retrieval system.
 - Long tasks may still lose specific validation/edit/review evidence under projection pressure unless those evidence classes are explicitly pinned.
-- Workspace memory lifecycle governance is now documented and has store/MCP/CLI
-  surfaces, but no GUI review surface or automatic stale/conflict cleanup is
-  implemented.
+- Workspace memory adapter lifecycle governance is now documented and has
+  store/MCP/CLI surfaces, but no GUI review surface, plast-mem bridge, or
+  automatic stale/conflict cleanup is implemented.
 
 ## Follow-Up Slices
 
@@ -446,7 +457,7 @@ Do not include:
 - vector search
 - workspace memory promotion
 
-### Slice 5: Workspace Memory Governance
+### Slice 5: Workspace Memory Adapter Governance
 
 Goal: implement tooling only after the promotion rules above prove sufficient in
 manual/out-of-band review.
@@ -475,5 +486,6 @@ Do not include:
 - Do not add live eval scenarios.
 - Do not add UI, CLI, chafa, desktop, or browser features.
 - Do not call archived context long-term memory.
-- Do not call workspace memory governance complete.
+- Do not call local workspace memory AIRI's long-term memory system.
+- Do not call workspace memory adapter governance complete.
 - Do not treat projected prompt context as a truth source.
