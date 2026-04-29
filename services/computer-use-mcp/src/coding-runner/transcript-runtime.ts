@@ -1,6 +1,8 @@
 import type { ArchiveCandidate } from '../archived-context/types'
 import type { PlanSpec, PlanState } from '../planning-orchestration/contract'
+import type { PlanLaneRoutingResult } from '../planning-orchestration/lane-router'
 import type { PlanStateProjectionMetadata, PlanStateProjectionOptions } from '../planning-orchestration/projection'
+import type { PlanRouteSummaryProjectionMetadata, PlanRouteSummaryProjectionOptions } from '../planning-orchestration/route-projection'
 import type { ComputerUseServerRuntime } from '../server/runtime'
 import type { TranscriptRetentionLimits } from '../transcript/retention'
 import type { TranscriptProjectionMetadata, TranscriptProjectionResult } from '../transcript/types'
@@ -12,6 +14,7 @@ import { join } from 'node:path'
 import { buildArchiveCandidates } from '../archived-context/candidates'
 import { ArchiveContextStore } from '../archived-context/store'
 import { projectPlanStateForPrompt } from '../planning-orchestration/projection'
+import { projectPlanRouteSummaryForPrompt } from '../planning-orchestration/route-projection'
 import { projectContext } from '../projection/context-projector'
 import { projectTranscript } from '../transcript/projector'
 import { InMemoryTranscriptStore, TranscriptStore } from '../transcript/store'
@@ -36,6 +39,8 @@ export interface CodingTurnProjectionOptions {
   planSpec?: PlanSpec
   planState?: PlanState
   planProjection?: PlanStateProjectionOptions
+  planRouting?: PlanLaneRoutingResult
+  planRouteProjection?: PlanRouteSummaryProjectionOptions
   policy?: CodingTurnContextPolicyOverrides
 }
 
@@ -57,9 +62,28 @@ export type CodingTurnPlanStateProjectionMetadata
       maySatisfyMutationProof: false
     }
 
+export type CodingTurnPlanRouteProjectionMetadata
+  = | PlanRouteSummaryProjectionMetadata
+    | {
+      scope: 'current_run_plan_route_projection'
+      included: false
+      characters: 0
+      projectedRouteCount: 0
+      omittedRouteCount: 0
+      projectedBlockedStepCount: 0
+      omittedBlockedStepCount: 0
+      projectedApprovalStepCount: 0
+      omittedApprovalStepCount: 0
+      authoritySource: 'plan_state_reconciler_decision'
+      mayExecute: false
+      maySatisfyVerificationGate: false
+      maySatisfyMutationProof: false
+    }
+
 export interface CodingTurnSourceProjectionMetadata {
   policy: CodingTurnContextPolicy
   planState: CodingTurnPlanStateProjectionMetadata
+  planRouteSummary: CodingTurnPlanRouteProjectionMetadata
   workspaceMemory: {
     included: boolean
     characters: number
@@ -129,11 +153,15 @@ export function projectForCodingTurn(
   const planStateProjection = options.planSpec && options.planState
     ? projectPlanStateForPrompt(options.planSpec, options.planState, options.planProjection)
     : undefined
+  const planRouteProjection = options.planRouting
+    ? projectPlanRouteSummaryForPrompt(options.planRouting, options.planRouteProjection)
+    : undefined
   const taskMemoryString = runtime.taskMemory.toContextString()
   const taskMemoryStringForProjection = taskMemoryString.trim().length > 0 ? taskMemoryString : undefined
   const recentTrace = getRecentTraceForPolicy(runtime, policy.recentTraceEntryLimit)
   const systemPromptWithPlanState = appendPlanStateProjection(systemPromptBase, planStateProjection?.block)
-  const systemPromptWithWorkspaceMemory = appendWorkspaceMemory(systemPromptWithPlanState, workspaceMemoryText)
+  const systemPromptWithPlanRoutes = appendPlanRouteProjection(systemPromptWithPlanState, planRouteProjection?.block)
+  const systemPromptWithWorkspaceMemory = appendWorkspaceMemory(systemPromptWithPlanRoutes, workspaceMemoryText)
   const systemPromptWithMemoryContext = appendPlastMemContext(systemPromptWithWorkspaceMemory, plastMemContextText)
   const contextProjection = projectContext({
     trace: recentTrace,
@@ -159,6 +187,7 @@ export function projectForCodingTurn(
     sourceProjectionMetadata: {
       policy,
       planState: planStateProjection?.metadata ?? skippedPlanStateProjectionMetadata(),
+      planRouteSummary: planRouteProjection?.metadata ?? skippedPlanRouteProjectionMetadata(),
       workspaceMemory: {
         included: workspaceMemoryText.length > 0,
         characters: workspaceMemoryText.length,
@@ -201,6 +230,17 @@ function appendPlanStateProjection(systemPromptBase: string, planStateText: stri
   ].join('\n\n')
 }
 
+function appendPlanRouteProjection(systemPromptBase: string, planRouteText: string | undefined): string {
+  if (!planRouteText)
+    return systemPromptBase
+
+  return [
+    systemPromptBase,
+    '【Current Plan Route Summary】',
+    planRouteText,
+  ].join('\n\n')
+}
+
 function getRecentTraceForPolicy(runtime: ComputerUseServerRuntime, limit: number): SessionTraceEntry[] {
   if (limit <= 0)
     return []
@@ -232,6 +272,24 @@ function skippedPlanStateProjectionMetadata(): CodingTurnPlanStateProjectionMeta
     projectedBlockerCount: 0,
     omittedBlockerCount: 0,
     authoritySource: 'plan_state_reconciler_decision',
+    maySatisfyVerificationGate: false,
+    maySatisfyMutationProof: false,
+  }
+}
+
+function skippedPlanRouteProjectionMetadata(): CodingTurnPlanRouteProjectionMetadata {
+  return {
+    scope: 'current_run_plan_route_projection',
+    included: false,
+    characters: 0,
+    projectedRouteCount: 0,
+    omittedRouteCount: 0,
+    projectedBlockedStepCount: 0,
+    omittedBlockedStepCount: 0,
+    projectedApprovalStepCount: 0,
+    omittedApprovalStepCount: 0,
+    authoritySource: 'plan_state_reconciler_decision',
+    mayExecute: false,
     maySatisfyVerificationGate: false,
     maySatisfyMutationProof: false,
   }

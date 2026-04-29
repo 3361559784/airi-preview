@@ -71,6 +71,7 @@ flowchart TD
   A["runCodingTask<br/>src/coding-runner/service.ts"] --> B["workspaceMemoryStore.toContextString(taskGoal)"]
   A --> C["projectForCodingTurn<br/>src/coding-runner/transcript-runtime.ts"]
   PLAN["optional planSpec + planState<br/>src/planning-orchestration/projection.ts"] --> C
+  ROUTE["optional planRouting<br/>src/planning-orchestration/route-projection.ts"] --> C
   B --> C
   C --> D["projectContext<br/>src/projection/context-projector.ts"]
   C --> E["projectTranscript<br/>src/transcript/projector.ts"]
@@ -235,6 +236,8 @@ flowchart LR
 - plan projection is bounded and current-run only
 - `projectForCodingTurn()` only injects plan projection when both `planSpec`
   and `planState` are supplied
+- `projectForCodingTurn()` only injects route summary projection when
+  `planRouting` is supplied
 - reconciliation matches explicit current-run observations by exact `stepId`
   and source
 - reconciled plan evidence still cannot satisfy verification gates

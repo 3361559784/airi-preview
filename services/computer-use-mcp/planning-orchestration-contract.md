@@ -135,14 +135,18 @@ verification gates remain the authority.
 
 - if both `planSpec` and `planState` are present, it injects the bounded
   projection block into the system context
+- if `planRouting` is present, it injects the bounded route-summary projection
+  block into the system context
 - if either value is missing, projection metadata is recorded as `skipped`
-- the plan block is inserted before local Workspace Memory, plast-mem context,
-  and TaskMemory
-- projection metadata is tracked separately from Workspace Memory, plast-mem,
-  TaskMemory, transcript, operational trace, and archive metadata
+- the plan block is inserted before route summaries, local Workspace Memory,
+  plast-mem context, and TaskMemory
+- route-summary projection metadata is tracked separately from plan state,
+  Workspace Memory, plast-mem, TaskMemory, transcript, operational trace, and
+  archive metadata
 
 This is not automatic planning. No runner code generates `PlanSpec` or
-`PlanState` in this slice.
+`PlanState`, and no runner code generates route summaries unless a caller
+explicitly supplies a routing result.
 
 ## Lane Routing Classification
 
@@ -187,8 +191,8 @@ terminal surface, enqueue approval, invoke a tool, or mark evidence complete.
 ## Route Summary Projection
 
 `projectPlanRouteSummaryForPrompt()` defines a bounded projection for
-deterministic lane-router output. It is a pure function and is not wired into
-runner prompt assembly yet.
+deterministic lane-router output. `projectForCodingTurn()` can inject this
+projection only when the caller explicitly supplies `planRouting`.
 
 The projection block must include:
 
@@ -317,19 +321,11 @@ decides whether the run can report success.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
-- No desktop/browser/coding runtime behavior change.
+- No desktop/browser/coding execution behavior change.
 - No merge or rebase with upstream desktop/chrome-extension work.
 
 ## Future Slices
 
-1. `test(computer-use-mcp): define route summary projection contract`
-   - Landed as pure projection only. It is not wired into runner prompt
-     assembly.
-
-2. `feat(computer-use-mcp): project plan route summaries into coding context`
-   - Inject bounded route summaries only when the caller explicitly supplies a
-     routing result.
-
-3. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
+1. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
    - Consume current-run observations only after route projection and approval
      boundaries are explicit.

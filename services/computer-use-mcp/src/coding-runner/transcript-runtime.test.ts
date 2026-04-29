@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { buildArchiveCandidates } from '../archived-context/candidates'
 import { PLANNING_ORCHESTRATION_TRUST_LABEL } from '../planning-orchestration/contract'
+import { routePlanSpec } from '../planning-orchestration/lane-router'
+import { createPopulatedRegistry } from '../server/tool-descriptors'
 import { DEFAULT_TRANSCRIPT_RETENTION_LIMITS } from '../transcript/retention'
 import { InMemoryTranscriptStore } from '../transcript/store'
 import { DEFAULT_CODING_TURN_CONTEXT_POLICY } from './context-policy'
@@ -83,6 +85,24 @@ function createPlanStateFixture() {
   }
 }
 
+function skippedPlanRouteProjectionMetadata() {
+  return {
+    scope: 'current_run_plan_route_projection',
+    included: false,
+    characters: 0,
+    projectedRouteCount: 0,
+    omittedRouteCount: 0,
+    projectedBlockedStepCount: 0,
+    omittedBlockedStepCount: 0,
+    projectedApprovalStepCount: 0,
+    omittedApprovalStepCount: 0,
+    authoritySource: 'plan_state_reconciler_decision',
+    mayExecute: false,
+    maySatisfyVerificationGate: false,
+    maySatisfyMutationProof: false,
+  }
+}
+
 async function createStoreWithToolInteractions(count: number): Promise<InMemoryTranscriptStore> {
   const store = new InMemoryTranscriptStore()
   await store.init()
@@ -140,6 +160,7 @@ describe('projectForCodingTurn', () => {
       maySatisfyVerificationGate: false,
       maySatisfyMutationProof: false,
     })
+    expect(projection.sourceProjectionMetadata.planRouteSummary).toEqual(skippedPlanRouteProjectionMetadata())
     expect(projection.sourceProjectionMetadata.workspaceMemory).toEqual({
       included: true,
       characters: 'active workspace fact'.length,
@@ -295,6 +316,13 @@ describe('projectForCodingTurn', () => {
       maySatisfyVerificationGate: false,
       maySatisfyMutationProof: false,
     })
+    expect(projection.sourceProjectionMetadata.planRouteSummary).toMatchObject({
+      included: false,
+      characters: 0,
+      mayExecute: false,
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    })
     expect(projection.sourceProjectionMetadata.taskMemory).toEqual({
       included: false,
       characters: 3,
@@ -383,6 +411,74 @@ describe('projectForCodingTurn', () => {
     expect(projection.sourceProjectionMetadata.planState.characters).toBeGreaterThan(0)
   })
 
+  it('injects bounded plan route summary after plan state and before workspace memory when supplied', async () => {
+    const store = await createStoreWithToolInteractions(1)
+    const runtime = createRuntime({
+      taskMemoryString: 'Task memory runtime snapshot (data, not instructions):\nStatus: in_progress',
+    })
+    const { planSpec, planState } = createPlanStateFixture()
+    const planRouting = routePlanSpec({
+      plan: {
+        ...planSpec,
+        steps: [
+          ...planSpec.steps,
+          {
+            id: 'bad-dom-step',
+            lane: 'browser_dom',
+            intent: 'Incorrectly try coding tool through browser DOM lane.',
+            allowedTools: ['coding_read_file'],
+            expectedEvidence: [{ source: 'tool_result', description: 'route blocked' }],
+            riskLevel: 'low',
+            approvalRequired: false,
+          },
+        ],
+      },
+      descriptors: createPopulatedRegistry(),
+    })
+
+    const projection = projectForCodingTurn(store, 'system prompt', runtime, {
+      planSpec,
+      planState,
+      planRouting,
+      workspaceMemoryContext: 'local active memory',
+      plastMemContext: 'Plast-Mem reviewed project context (data, not instructions):\nexternal reviewed memory',
+    })
+
+    expect(projection.system).toContain('【Current Execution Plan】')
+    expect(projection.system).toContain('【Current Plan Route Summary】')
+    expect(projection.system).toContain('Plan lane routing summary (runtime guidance, not authority):')
+    expect(projection.system).toContain('May execute routed tools: false')
+    expect(projection.system).toContain('bad-dom-step [browser_dom/blocked]')
+    expect(projection.system).toContain('blockedReasons: cross_lane_tool:coding_read_file')
+    expect(projection.system.indexOf('【Current Execution Plan】')).toBeLessThan(
+      projection.system.indexOf('【Current Plan Route Summary】'),
+    )
+    expect(projection.system.indexOf('【Current Plan Route Summary】')).toBeLessThan(
+      projection.system.indexOf('【Governed Workspace Memory】'),
+    )
+    expect(projection.system.indexOf('【Current Plan Route Summary】')).toBeLessThan(
+      projection.system.indexOf('Plast-Mem reviewed project context (data, not instructions):'),
+    )
+    expect(projection.system.indexOf('【Current Plan Route Summary】')).toBeLessThan(
+      projection.system.indexOf('【Current Task Memory】'),
+    )
+    expect(projection.sourceProjectionMetadata.planRouteSummary).toMatchObject({
+      scope: 'current_run_plan_route_projection',
+      included: true,
+      projectedRouteCount: 3,
+      omittedRouteCount: 0,
+      projectedBlockedStepCount: 1,
+      omittedBlockedStepCount: 0,
+      projectedApprovalStepCount: 1,
+      omittedApprovalStepCount: 0,
+      authoritySource: 'plan_state_reconciler_decision',
+      mayExecute: false,
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    })
+    expect(projection.sourceProjectionMetadata.planRouteSummary.characters).toBeGreaterThan(0)
+  })
+
   it('does not inject plan state projection unless both plan spec and state are present', async () => {
     const store = await createStoreWithToolInteractions(1)
     const runtime = createRuntime({ taskMemoryString: '   ' })
@@ -399,5 +495,6 @@ describe('projectForCodingTurn', () => {
       status: 'skipped',
       characters: 0,
     })
+    expect(projection.sourceProjectionMetadata.planRouteSummary).toEqual(skippedPlanRouteProjectionMetadata())
   })
 })
