@@ -18,6 +18,12 @@ function mapping(workflow: WorkflowDefinition): PlanWorkflowMappingResult {
     scope: 'current_run_plan_workflow_mapping',
     status: 'mapped',
     workflow,
+    mappedSteps: workflow.steps.map((step, index) => ({
+      stepId: step.label,
+      workflowStepIndex: index,
+      workflowStepLabel: step.label,
+      workflowStepKind: step.kind,
+    })),
     problems: [],
     mayExecute: false,
     maySatisfyVerificationGate: false,
@@ -99,6 +105,7 @@ describe('mapped plan workflow execution boundary', () => {
       mapping: {
         scope: 'current_run_plan_workflow_mapping',
         status: 'blocked',
+        mappedSteps: [],
         problems: [{ reason: 'handoff_not_ready', detail: 'not ready' }],
         mayExecute: false,
         maySatisfyVerificationGate: false,

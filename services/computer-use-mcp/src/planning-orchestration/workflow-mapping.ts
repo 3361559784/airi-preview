@@ -26,10 +26,18 @@ export interface PlanWorkflowMappingProblem {
   detail: string
 }
 
+export interface PlanWorkflowMappedStepRef {
+  stepId: string
+  workflowStepIndex: number
+  workflowStepLabel: string
+  workflowStepKind: WorkflowStepKind
+}
+
 export interface PlanWorkflowMappingResult {
   scope: 'current_run_plan_workflow_mapping'
   status: PlanWorkflowMappingStatus
   workflow?: WorkflowDefinition
+  mappedSteps: PlanWorkflowMappedStepRef[]
   problems: PlanWorkflowMappingProblem[]
   mayExecute: false
   maySatisfyVerificationGate: false
@@ -91,6 +99,7 @@ export function mapPlanHandoffToWorkflowDefinition(params: {
     return {
       scope: 'current_run_plan_workflow_mapping',
       status: 'blocked',
+      mappedSteps: [],
       problems,
       mayExecute: false,
       maySatisfyVerificationGate: false,
@@ -99,8 +108,8 @@ export function mapPlanHandoffToWorkflowDefinition(params: {
   }
 
   const mappingByStepId = new Map(params.mappings.map(mapping => [mapping.stepId, mapping]))
-  const steps = params.handoff.steps
-    .filter(step => step.handoffStatus === 'ready_for_mapping')
+  const readySteps = params.handoff.steps.filter(step => step.handoffStatus === 'ready_for_mapping')
+  const steps = readySteps
     .map((step): WorkflowStepTemplate => {
       const mapping = mappingByStepId.get(step.stepId)!
       return {
@@ -113,6 +122,15 @@ export function mapPlanHandoffToWorkflowDefinition(params: {
         ...(mapping.terminal ? { terminal: { ...mapping.terminal } } : {}),
       }
     })
+  const mappedSteps = readySteps.map((step, workflowStepIndex): PlanWorkflowMappedStepRef => {
+    const mapping = mappingByStepId.get(step.stepId)!
+    return {
+      stepId: step.stepId,
+      workflowStepIndex,
+      workflowStepLabel: mapping.label ?? step.stepId,
+      workflowStepKind: mapping.kind,
+    }
+  })
 
   return {
     scope: 'current_run_plan_workflow_mapping',
@@ -124,6 +142,7 @@ export function mapPlanHandoffToWorkflowDefinition(params: {
       steps,
       maxRetries: params.maxRetries ?? 2,
     },
+    mappedSteps,
     problems: [],
     mayExecute: false,
     maySatisfyVerificationGate: false,

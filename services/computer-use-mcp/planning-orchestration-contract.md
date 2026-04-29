@@ -52,6 +52,8 @@ The tested contract lives in:
 - `src/planning-orchestration/workflow-mapping.test.ts`
 - `src/planning-orchestration/workflow-execution.ts`
 - `src/planning-orchestration/workflow-execution.test.ts`
+- `src/planning-orchestration/workflow-evidence.ts`
+- `src/planning-orchestration/workflow-evidence.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -70,6 +72,7 @@ The current contract defines:
 - deterministic plan route to workflow handoff shape
 - deterministic plan handoff to workflow template mapping shape
 - explicit mapped workflow execution boundary
+- deterministic workflow execution to plan evidence observation bridge
 
 ## PlanSpec
 
@@ -318,6 +321,33 @@ suspension, PTY acquisition, reroute, and formatter contracts. `autoApproveSteps
 defaults to `false`; callers must opt in explicitly if they own a higher-level
 approval boundary.
 
+## Workflow Evidence Observation Bridge
+
+`buildPlanEvidenceObservationsFromWorkflowExecution()` defines the first
+workflow-result-to-plan-evidence bridge. It consumes a mapped workflow result
+and a mapped workflow execution result, then emits current-run
+`PlanEvidenceObservation` rows for the reconciler.
+
+The bridge is allowed to emit only:
+
+- `source: tool_result`
+- `status: satisfied | failed`
+- original plan step ids from `PlanWorkflowMappingResult.mappedSteps`
+- workflow step status, explanation, and tool metadata
+
+It must not emit:
+
+- `verification_gate` evidence
+- `human_approval` evidence
+- mutation proof
+- completion proof
+- Workspace Memory, Archive, TaskMemory, or plast-mem export records
+
+This keeps workflow execution below the verification gate. A successful mapped
+workflow can make a plan ready for final verification only when the plan
+expected `tool_result` evidence; it still cannot satisfy final verification by
+itself.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -415,7 +445,8 @@ decides whether the run can report success.
 - No automatic lane execution.
 - No automatic workflow definition creation.
 - No automatic workflow execution.
-- No model-visible cross-lane execution tool.
+- No default model-visible cross-lane execution tool.
+- No generic MCP workflow execution tool.
 - No runtime lane router execution.
 - No MCP schema or tool-surface change.
 - No automatic creation of `PlanSpec` or `PlanState`.
@@ -427,10 +458,10 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): expose explicit plan workflow execution through host workflow boundary`
-   - Add a host-controlled surface only if schema, approval, and audit
+1. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
+   - Consume current-run observations only after workflow mapping and approval
      boundaries are explicit.
 
-2. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
-   - Consume current-run observations only after workflow mapping and approval
+2. `feat(computer-use-mcp): add host-owned plan orchestration entrypoint`
+   - Add a host-controlled surface only if schema, approval, and audit
      boundaries are explicit.

@@ -751,6 +751,7 @@ function summarizePlanWorkflowMapping(mapping: PlanWorkflowMappingResult) {
     scope: mapping.scope,
     status: mapping.status,
     problems: mapping.problems,
+    mappedSteps: mapping.mappedSteps,
     workflow: mapping.workflow
       ? {
           id: mapping.workflow.id,

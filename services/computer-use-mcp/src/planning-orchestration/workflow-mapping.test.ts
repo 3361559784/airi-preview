@@ -90,6 +90,20 @@ describe('plan handoff to workflow mapping contract', () => {
         },
       ],
     })
+    expect(result.mappedSteps).toEqual([
+      {
+        stepId: 'read-file',
+        workflowStepIndex: 0,
+        workflowStepLabel: 'Read target file',
+        workflowStepKind: 'coding_read_file',
+      },
+      {
+        stepId: 'read-terminal',
+        workflowStepIndex: 1,
+        workflowStepLabel: 'read-terminal',
+        workflowStepKind: 'pty_read_screen',
+      },
+    ])
   })
 
   it('blocks mapping when handoff still requires approval or has blocked steps', () => {
@@ -123,12 +137,14 @@ describe('plan handoff to workflow mapping contract', () => {
 
     expect(approvalResult.status).toBe('blocked')
     expect(approvalResult.workflow).toBeUndefined()
+    expect(approvalResult.mappedSteps).toEqual([])
     expect(approvalResult.problems).toEqual([
       expect.objectContaining({ reason: 'mapping_for_non_ready_step', stepId: 'run-command' }),
       expect.objectContaining({ reason: 'handoff_not_ready' }),
     ])
     expect(blockedResult.status).toBe('blocked')
     expect(blockedResult.workflow).toBeUndefined()
+    expect(blockedResult.mappedSteps).toEqual([])
     expect(blockedResult.problems).toEqual([
       expect.objectContaining({ reason: 'handoff_not_ready' }),
     ])
