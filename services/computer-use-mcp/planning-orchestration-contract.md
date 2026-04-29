@@ -38,6 +38,8 @@ The tested contract lives in:
 
 - `src/planning-orchestration/contract.ts`
 - `src/planning-orchestration/contract.test.ts`
+- `src/planning-orchestration/projection.ts`
+- `src/planning-orchestration/projection.test.ts`
 
 The current contract defines:
 
@@ -47,6 +49,7 @@ The current contract defines:
 - `PlanReconcilerDecision`
 - planning authority precedence
 - planning guidance prompt label
+- bounded plan-state projection shape
 
 ## PlanSpec
 
@@ -82,6 +85,37 @@ It may record:
 It must not be written to Workspace Memory, plast-mem, or Run Evidence Archive
 by this contract. Future projection may show a bounded plan-state summary, but
 only as runtime guidance.
+
+## Plan State Projection
+
+`projectPlanStateForPrompt()` defines the first model-visible projection
+contract. It is a pure function. It is not wired into `coding-runner` yet.
+
+The projection block must include:
+
+- the planning trust label
+- guidance-not-authority boundary lines
+- projection status: `active | blocked | stale | superseded`
+- current goal and current step
+- bounded step summaries with lane, status, risk, approval flag, allowed tools,
+  and expected evidence
+- bounded evidence references
+- bounded blockers
+- source metadata stating that plan projection cannot satisfy verification gate
+  or mutation proof
+
+The projection metadata is current-run only:
+
+- `scope: current_run_plan_projection`
+- included/character counts
+- projected/omitted counts for steps, evidence refs, and blockers
+- `authoritySource: plan_state_reconciler_decision`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+Blocked, stale, and superseded plans are still visible as runtime guidance, but
+their state does not become failure proof or completion proof. Tool evidence and
+verification gates remain the authority.
 
 ## Trust Label
 
@@ -121,6 +155,7 @@ Consequences:
 - A plan cannot satisfy mutation proof.
 - A plan cannot override tool results.
 - A plan cannot bypass approval or verification gates.
+- A stale or superseded plan cannot delete or override current-run evidence.
 
 ## Reconciler Contract
 
@@ -142,6 +177,7 @@ decides whether the run can report success.
 - No lane router implementation.
 - No MCP schema or tool-surface change.
 - No coding-runner prompt injection change.
+- No plan-state projection wired into runtime prompt assembly yet.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
@@ -150,16 +186,13 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `test(computer-use-mcp): define plan state projection contract`
-   - Define a bounded model-visible projection shape for current-run plan state.
-
-2. `feat(computer-use-mcp): add current-run plan state projection`
+1. `feat(computer-use-mcp): add current-run plan state projection`
    - Inject plan guidance only after the projection contract is tested.
 
-3. `test(computer-use-mcp): define plan evidence reconciliation contract`
+2. `test(computer-use-mcp): define plan evidence reconciliation contract`
    - Map expected evidence to current-run tool evidence and verification gate
      decisions.
 
-4. `feat(computer-use-mcp): route plan steps across lanes`
+3. `feat(computer-use-mcp): route plan steps across lanes`
    - Add deterministic routing only after projection and reconciliation are
      stable.
