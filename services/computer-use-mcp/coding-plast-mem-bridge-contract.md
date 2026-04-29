@@ -3,9 +3,10 @@
 This document defines the contract boundary between `computer-use-mcp` coding
 memory and `moeru-ai/plast-mem`.
 
-It is a contract plus the current optional local export/ingestion adapter. It
-does not add coding-runner prompt injection, model-visible tools, MCP schema
-changes, direct semantic-memory writes, or a `plast-mem` package dependency.
+It is a contract plus the current optional local export/ingestion adapter and
+bounded pre-retrieve prompt context. It does not add model-visible tools, MCP
+schema changes, direct semantic-memory writes, or a `plast-mem` package
+dependency.
 
 ## Summary
 
@@ -176,10 +177,10 @@ long-term memory semantics, conflict handling, and invalidation.
 
 ## Retrieval Contract V1
 
-Preferred future read path:
+Current optional read path:
 
 ```text
-coding task goal + workspace key + relevant files
+coding task goal
   -> plast-mem context_pre_retrieve
   -> bounded reviewed context block
   -> coding-runner prompt projection
@@ -200,9 +201,12 @@ The block must stay below current runtime authority:
 - current-run Task Memory evidence
 - current-run Run Evidence Archive recall results
 
-If `plast-mem` retrieval conflicts with current-run evidence, current-run
-evidence wins. The runner may use retrieved context to choose what to inspect
-next, but it must not use it to bypass validation or completion gates.
+The current implementation queries with the task goal once per run and reuses
+the bounded block for subsequent turns. Future retrieval can add file-aware
+queries only after a separate contract/test slice. If `plast-mem` retrieval
+conflicts with current-run evidence, current-run evidence wins. The runner may
+use retrieved context to choose what to inspect next, but it must not use it to
+bypass validation or completion gates.
 
 For the deterministic source ordering contract, see
 `workspace-memory-retrieval-precedence.md` and
@@ -226,7 +230,8 @@ The only safe prompt role is reviewed contextual evidence.
 
 ## Non-Goals
 
-- No coding-runner runtime prompt integration in this slice.
+- No model-visible retrieval tool.
+- No unbounded coding-runner prompt integration.
 - No required `plast-mem` dependency in `computer-use-mcp`.
 - No automatic runner-side HTTP/API ingestion.
 - No direct writes to `plast-mem` `semantic_memory`.
@@ -242,17 +247,11 @@ The only safe prompt role is reviewed contextual evidence.
 
 ## Future Implementation Slices
 
-1. `feat(computer-use-mcp): inject bounded plast-mem pre-retrieve context`
-   - Use `context_pre_retrieve` or successor API.
-   - Label returned context as data, not instructions.
-   - Keep active-only local workspace memory behavior intact until explicitly
-     replaced.
-
-2. `test(computer-use-mcp): cover plast-mem conflict precedence`
+1. `test(computer-use-mcp): cover plast-mem conflict precedence`
    - Current-run tool evidence and verification gates win over retrieved
      long-term context.
 
-3. `docs/test(computer-use-mcp): define semantic stale judgment contract`
+2. `docs/test(computer-use-mcp): define semantic stale judgment contract`
    - Define stale inputs and outputs before automatic stale decisions.
 
 ## Acceptance Criteria

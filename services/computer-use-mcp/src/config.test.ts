@@ -105,4 +105,56 @@ describe('resolveComputerUseConfig', () => {
       timeoutMs: 2500,
     })
   })
+
+  it('parses optional plast-mem pre-retrieve settings from env separately from ingestion', () => {
+    process.env.COMPUTER_USE_PLAST_MEM_INGEST_ENABLED = '0'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_ENABLED = '1'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_BASE_URL = 'http://localhost:3030/'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_CONVERSATION_ID = '00000000-0000-4000-8000-000000000002'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_API_KEY = 'retrieve-token'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_TIMEOUT_MS = '2500'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_SEMANTIC_LIMIT = '6'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_MAX_CHARS = '1234'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_DETAIL = 'low'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_CATEGORY = 'guideline'
+
+    const config = resolveComputerUseConfig()
+
+    expect(config.workspaceMemoryPlastMemIngestion.enabled).toBe(false)
+    expect(config.workspaceMemoryPlastMemPreRetrieve).toEqual({
+      enabled: true,
+      baseUrl: 'http://localhost:3030/',
+      conversationId: '00000000-0000-4000-8000-000000000002',
+      apiKey: 'retrieve-token',
+      timeoutMs: 2500,
+      semanticLimit: 6,
+      maxChars: 1234,
+      detail: 'low',
+      category: 'guideline',
+    })
+  })
+
+  it('defaults disabled plast-mem pre-retrieve settings and falls back from invalid numbers', () => {
+    process.env.COMPUTER_USE_PLAST_MEM_BASE_URL = 'http://localhost:3030'
+    process.env.COMPUTER_USE_PLAST_MEM_CONVERSATION_ID = '00000000-0000-4000-8000-000000000003'
+    process.env.COMPUTER_USE_PLAST_MEM_API_KEY = 'shared-token'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_TIMEOUT_MS = '-1'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_SEMANTIC_LIMIT = '0'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_MAX_CHARS = 'not-a-number'
+    process.env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_DETAIL = 'verbose'
+
+    const config = resolveComputerUseConfig()
+
+    expect(config.workspaceMemoryPlastMemPreRetrieve).toEqual({
+      enabled: false,
+      baseUrl: 'http://localhost:3030',
+      conversationId: '00000000-0000-4000-8000-000000000003',
+      apiKey: 'shared-token',
+      timeoutMs: 5000,
+      semanticLimit: 8,
+      maxChars: 4000,
+      detail: 'auto',
+      category: undefined,
+    })
+  })
 })

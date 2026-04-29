@@ -10,6 +10,7 @@ import { errorMessageFrom } from '@moeru/std'
 import { generateText } from '@xsai/generate-text'
 
 import { evaluateCodingVerificationGate } from '../coding/verification-gate'
+import { tryPreRetrievePlastMemContext } from '../workspace-memory/plast-mem-pre-retrieve'
 import { createCodingRunnerEventEmitter } from './events'
 import { buildArchiveRecallFinalizationMemory, buildBudgetExhaustedMemory, buildBudgetPressureMemory, buildReportStatusMemory, buildStepMemory, buildSuccessfulToolEvidenceMemory, buildTaskStartMemory, buildTextOnlyReportRequiredMemory, buildToolFailureMemory, buildVerificationGateFailureMemory, syncCodingRunnerTaskMemory } from './memory'
 import { buildXsaiCodingTools } from './tool-runtime'
@@ -46,6 +47,10 @@ function isGithubModelsBaseURL(baseURL: string): boolean {
     return false
   }
 }
+
+const MAX_FAILURE_SUMMARY_CHARS = 500
+const MAX_FINAL_REPORT_CORRECTION_ATTEMPTS = 2
+const ARCHIVE_RECALL_DENIED = 'ARCHIVE_RECALL_DENIED'
 
 export class CodingRunnerImpl implements CodingRunner {
   constructor(
@@ -90,6 +95,13 @@ export class CodingRunnerImpl implements CodingRunner {
       workspacePath,
       this.deps.useInMemoryTranscript ?? false,
     )
+    const plastMemPreRetrieve = await tryPreRetrievePlastMemContext(
+      taskGoal,
+      runtime.config.workspaceMemoryPlastMemPreRetrieve,
+    )
+    const plastMemContext = plastMemPreRetrieve.status === 'included'
+      ? plastMemPreRetrieve.context
+      : ''
     const xsaiTools = await buildXsaiCodingTools(runtime, executeAction, {
       events,
       archiveStore,
@@ -244,6 +256,8 @@ export class CodingRunnerImpl implements CodingRunner {
         const workspaceMemoryContext = workspaceMemoryStore.toContextString(taskGoal)
         const projection = projectForCodingTurn(transcriptStore, this.config.systemPromptBase, runtime, {
           workspaceMemoryContext,
+          plastMemContext,
+          plastMemContextStatus: plastMemPreRetrieve.status,
         })
         const providerInput = buildProviderCompatibleGenerateTextInput({
           baseURL: this.config.baseURL,
@@ -597,6 +611,8 @@ export class CodingRunnerImpl implements CodingRunner {
       totalSteps,
       transcriptMetadata: projectForCodingTurn(transcriptStore, this.config.systemPromptBase, runtime, {
         workspaceMemoryContext: workspaceMemoryStore.toContextString(taskGoal),
+        plastMemContext,
+        plastMemContextStatus: plastMemPreRetrieve.status,
       }).metadata,
       turns,
       error: finalError,
@@ -616,10 +632,6 @@ type CodingRunnerExitReason
     | 'archive_recall_failure'
     | 'budget_exhausted'
     | 'crash'
-
-const MAX_FAILURE_SUMMARY_CHARS = 500
-const MAX_FINAL_REPORT_CORRECTION_ATTEMPTS = 2
-const ARCHIVE_RECALL_DENIED = 'ARCHIVE_RECALL_DENIED'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null

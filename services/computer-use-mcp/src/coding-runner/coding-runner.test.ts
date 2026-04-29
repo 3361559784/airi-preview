@@ -13,6 +13,7 @@ import * as xsaiTool from '@xsai/tool'
 import { ArchiveContextStore } from '../archived-context/store'
 import { TaskMemoryManager } from '../task-memory/manager'
 import { InMemoryTranscriptStore, TranscriptStore } from '../transcript/store'
+import { PLAST_MEM_PRE_RETRIEVE_TRUST_LABEL } from '../workspace-memory/plast-mem-pre-retrieve'
 import { workspaceKeyFromPath, WorkspaceMemoryStore } from '../workspace-memory/store'
 import { createCodingRunnerEventEmitter } from './events'
 import { buildProviderCompatibleGenerateTextInput, createCodingRunner } from './service'
@@ -184,6 +185,7 @@ describe('codingRunner', () => {
   })
 
   afterEach(async () => {
+    vi.unstubAllGlobals()
     await Promise.all(createdSessionRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
   })
 
@@ -2455,10 +2457,12 @@ describe('codingRunner', () => {
       const searchTool = tools.find((toolDef: any) => toolDef.name === 'coding_search_workspace_memory')
       const readTool = tools.find((toolDef: any) => toolDef.name === 'coding_read_workspace_memory')
       const promotionTool = tools.find((toolDef: any) => toolDef.name.includes('workspace_memory') && /review|update|activate|promote/i.test(toolDef.name))
+      const plastMemTool = tools.find((toolDef: any) => /plast.?mem/i.test(toolDef.name))
       expect(proposeTool).toBeDefined()
       expect(searchTool).toBeDefined()
       expect(readTool).toBeDefined()
       expect(promotionTool).toBeUndefined()
+      expect(plastMemTool).toBeUndefined()
 
       const proposed = JSON.parse(await proposeTool.execute({
         kind: 'constraint',
@@ -2596,6 +2600,154 @@ describe('codingRunner', () => {
       })
 
       expect(result.status).toBe('completed')
+    }
+    finally {
+      await rm(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('injects bounded plast-mem pre-retrieve context below active workspace memory when enabled', async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), 'coding-runner-plast-mem-context-'))
+    const workspacePath = join(tmpRoot, 'repo')
+    const { mockRuntime, mockExecuteAction } = createMockDeps(tmpRoot)
+    const seedStore = new WorkspaceMemoryStore(
+      join(tmpRoot, 'workspace-memory', `${workspaceKeyFromPath(workspacePath)}.jsonl`),
+      { workspacePath, sourceRunId: 'seed-run' },
+    )
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('Use filtered package tests from plast-mem.', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    mockRuntime.config.workspaceMemoryPlastMemPreRetrieve = {
+      enabled: true,
+      baseUrl: 'http://localhost:3030/',
+      conversationId: '00000000-0000-4000-8000-000000000001',
+      apiKey: 'plast-token',
+      timeoutMs: 5000,
+      semanticLimit: 8,
+      maxChars: 4000,
+      detail: 'auto',
+    }
+
+    try {
+      await seedStore.init()
+      const active = await seedStore.propose({
+        kind: 'constraint',
+        statement: 'For pnpm test tasks, use the local active workspace memory first.',
+        evidence: 'Seeded local memory for prompt ordering.',
+        confidence: 'high',
+      })
+      await seedStore.review({
+        id: active.id,
+        decision: 'activate',
+        reviewer: 'maintainer',
+        rationale: 'Verified local memory for prompt ordering.',
+      })
+
+      let observedSystem = ''
+      let observedMessages: unknown[] = []
+      vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+        observedSystem = opts.system
+        observedMessages = opts.messages
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_123',
+                function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_123',
+              content: JSON.stringify({ tool: 'coding_report_status', args: { status: 'completed' }, ok: true, status: 'completed' }),
+            },
+          ],
+        } as any
+      })
+
+      const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+      const result = await runner.runCodingTask({
+        workspacePath,
+        taskGoal: 'Fix pnpm test tasks',
+      })
+
+      expect(result.status).toBe('completed')
+      const localIndex = observedSystem.indexOf('use the local active workspace memory first.')
+      const plastIndex = observedSystem.indexOf(PLAST_MEM_PRE_RETRIEVE_TRUST_LABEL)
+      expect(localIndex).toBeGreaterThan(-1)
+      expect(plastIndex).toBeGreaterThan(-1)
+      expect(localIndex).toBeLessThan(plastIndex)
+      expect(observedSystem).toContain('Use filtered package tests from plast-mem.')
+      expect(JSON.stringify(observedMessages)).not.toContain('Use filtered package tests from plast-mem.')
+      expect(fetchMock).toHaveBeenCalledOnce()
+      const [, init] = fetchMock.mock.calls[0]!
+      expect(init?.headers).toMatchObject({
+        authorization: 'Bearer plast-token',
+      })
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        conversation_id: '00000000-0000-4000-8000-000000000001',
+        query: 'Fix pnpm test tasks',
+        semantic_limit: 8,
+        detail: 'auto',
+      })
+    }
+    finally {
+      await rm(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('continues without plast-mem context when pre-retrieve fails', async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), 'coding-runner-plast-mem-failure-'))
+    const workspacePath = join(tmpRoot, 'repo')
+    const { mockRuntime, mockExecuteAction } = createMockDeps(tmpRoot)
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('upstream failed with plast-token', { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    mockRuntime.config.workspaceMemoryPlastMemPreRetrieve = {
+      enabled: true,
+      baseUrl: 'http://localhost:3030',
+      conversationId: '00000000-0000-4000-8000-000000000001',
+      apiKey: 'plast-token',
+      timeoutMs: 5000,
+      semanticLimit: 8,
+      maxChars: 4000,
+      detail: 'auto',
+    }
+
+    try {
+      vi.mocked(xsaiGenerate.generateText).mockImplementation(async (opts: any) => {
+        expect(opts.system).not.toContain(PLAST_MEM_PRE_RETRIEVE_TRUST_LABEL)
+        expect(opts.system).not.toContain('upstream failed')
+        expect(opts.system).not.toContain('plast-token')
+        return {
+          messages: [
+            ...opts.messages,
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call_123',
+                function: { name: 'coding_report_status', arguments: '{"status":"completed"}' },
+              }],
+            },
+            {
+              role: 'tool',
+              tool_call_id: 'call_123',
+              content: JSON.stringify({ tool: 'coding_report_status', args: { status: 'completed' }, ok: true, status: 'completed' }),
+            },
+          ],
+        } as any
+      })
+
+      const runner = createCodingRunner(config, { runtime: mockRuntime, executeAction: mockExecuteAction, useInMemoryTranscript: true })
+      const result = await runner.runCodingTask({
+        workspacePath,
+        taskGoal: 'Fix pnpm test tasks',
+      })
+
+      expect(result.status).toBe('completed')
+      expect(fetchMock).toHaveBeenCalledOnce()
     }
     finally {
       await rm(tmpRoot, { recursive: true, force: true })

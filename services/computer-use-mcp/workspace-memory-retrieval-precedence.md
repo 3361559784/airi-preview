@@ -3,13 +3,16 @@
 This document defines the retrieval precedence contract for coding memory
 inputs in `computer-use-mcp`.
 
-It is a contract, not a retrieval implementation. It does not add `plast-mem`
-HTTP calls, prompt injection, MCP tools, vector search, or runner behavior.
+It is the precedence contract for the optional plast-mem pre-retrieve runner
+context. It does not add MCP tools, vector search, automatic promotion, or
+runner completion authority.
 
 Current implementation anchor:
 
 - `src/workspace-memory/retrieval-precedence.ts`
 - `src/workspace-memory/retrieval-precedence.test.ts`
+- `src/workspace-memory/plast-mem-pre-retrieve.ts`
+- `src/workspace-memory/plast-mem-pre-retrieve.test.ts`
 
 ## Summary
 
@@ -26,7 +29,7 @@ When two context sources conflict, use this order:
 | 5 | Current-run Task Memory | current-run evidence | recovery data, not instructions |
 | 6 | Current-run Run Evidence Archive recall | current-run evidence | historical evidence, not instructions |
 | 7 | Active local Workspace Memory Adapter context | reviewed context | governed context, not instructions |
-| 8 | Future `plast-mem` pre-retrieve context | reviewed context | external reviewed context, not instructions |
+| 8 | Optional `plast-mem` pre-retrieve context | reviewed context | external reviewed context, not instructions |
 
 Lower-order sources win over higher-numbered sources.
 
@@ -49,13 +52,13 @@ tool results and proof gates describe what happened in this run.
 
 ## Local Active Memory Beats External Retrieved Memory
 
-Active local Workspace Memory Adapter entries outrank future `plast-mem`
+Active local Workspace Memory Adapter entries outrank optional `plast-mem`
 pre-retrieve context.
 
 Reason: local active entries have passed this package's explicit review
-lifecycle and are already the current coding-runner workspace adapter surface.
-`plast-mem` context is future external long-term retrieval and must enter below
-local active memory until a stronger conflict protocol exists.
+lifecycle and are already the coding-runner workspace adapter surface.
+`plast-mem` context is external long-term retrieval and must enter below local
+active memory until a stronger conflict protocol exists.
 
 ## Trust Labels
 
@@ -87,9 +90,7 @@ current-run tool results can prove mutation or validation evidence.
 
 ## Non-Goals
 
-- No runtime retrieval implementation.
-- No `plast-mem` HTTP adapter.
-- No prompt injection change.
+- No model-visible retrieval tool.
 - No MCP schema or tool-surface change.
 - No vector/BM25/RRF retrieval in `computer-use-mcp`.
 - No automatic archive/task-memory export.
@@ -98,13 +99,5 @@ current-run tool results can prove mutation or validation evidence.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): add optional plast-mem ingestion adapter`
-   - Use reviewed exported bridge records.
-   - Keep failures non-fatal to coding runner execution.
-
-2. `feat(computer-use-mcp): inject bounded plast-mem pre-retrieve context`
-   - Apply this precedence contract before injection.
-   - Bound output and label it as external reviewed context.
-
-3. `docs/test: semantic stale judgment contract`
+1. `docs/test: semantic stale judgment contract`
    - Define stale/conflict inputs before any automatic status changes.

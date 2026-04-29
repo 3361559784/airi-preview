@@ -41,6 +41,11 @@ function parseInteger(value: string | undefined, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+function parsePositiveInteger(value: string | undefined, fallback: number) {
+  const parsed = parseInteger(value, fallback)
+  return parsed > 0 ? parsed : fallback
+}
+
 function parseList(value: string | undefined, fallback: string[] = []) {
   if (!value)
     return fallback
@@ -81,6 +86,12 @@ function parseApprovalMode(value: string | undefined): ApprovalMode {
   if (value === 'never' || value === 'all' || value === 'actions')
     return value
   return 'actions'
+}
+
+function parsePlastMemDetail(value: string | undefined): ComputerUseConfig['workspaceMemoryPlastMemPreRetrieve']['detail'] {
+  if (value === 'none' || value === 'low' || value === 'high' || value === 'auto')
+    return value
+  return 'auto'
 }
 
 function parseDisplaySize(value: string | undefined, fallback: DisplaySize): DisplaySize {
@@ -195,6 +206,23 @@ export function resolveComputerUseConfig(): ComputerUseConfig {
       conversationId: env.COMPUTER_USE_PLAST_MEM_CONVERSATION_ID?.trim() || undefined,
       apiKey: env.COMPUTER_USE_PLAST_MEM_API_KEY?.trim() || undefined,
       timeoutMs: parseInteger(env.COMPUTER_USE_PLAST_MEM_TIMEOUT_MS, 10_000),
+    },
+    workspaceMemoryPlastMemPreRetrieve: {
+      enabled: parseBoolean(env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_ENABLED, false),
+      baseUrl: env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_BASE_URL?.trim()
+        || env.COMPUTER_USE_PLAST_MEM_BASE_URL?.trim()
+        || undefined,
+      conversationId: env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_CONVERSATION_ID?.trim()
+        || env.COMPUTER_USE_PLAST_MEM_CONVERSATION_ID?.trim()
+        || undefined,
+      apiKey: env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_API_KEY?.trim()
+        || env.COMPUTER_USE_PLAST_MEM_API_KEY?.trim()
+        || undefined,
+      timeoutMs: parsePositiveInteger(env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_TIMEOUT_MS, 5_000),
+      semanticLimit: parsePositiveInteger(env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_SEMANTIC_LIMIT, 8),
+      maxChars: parsePositiveInteger(env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_MAX_CHARS, 4_000),
+      detail: parsePlastMemDetail(env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_DETAIL),
+      category: env.COMPUTER_USE_PLAST_MEM_PRE_RETRIEVE_CATEGORY?.trim() || undefined,
     },
     browserDomBridge: {
       enabled: parseBoolean(env.COMPUTER_USE_BROWSER_DOM_BRIDGE_ENABLED, true),

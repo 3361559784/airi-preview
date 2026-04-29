@@ -650,6 +650,17 @@ export interface ComputerUseConfig {
     apiKey?: string
     timeoutMs: number
   }
+  workspaceMemoryPlastMemPreRetrieve: {
+    enabled: boolean
+    baseUrl?: string
+    conversationId?: string
+    apiKey?: string
+    timeoutMs: number
+    semanticLimit: number
+    maxChars: number
+    detail: 'auto' | 'none' | 'low' | 'high'
+    category?: string
+  }
   browserDomBridge: BrowserDomBridgeConfig
   binaries: {
     swift: string
