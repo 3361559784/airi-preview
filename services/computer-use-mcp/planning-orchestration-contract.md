@@ -64,6 +64,8 @@ The tested contract lives in:
 - `src/planning-orchestration/state-apply.test.ts`
 - `src/planning-orchestration/host-runtime.ts`
 - `src/planning-orchestration/host-runtime.test.ts`
+- `src/planning-orchestration/host-runtime-state.ts`
+- `src/planning-orchestration/host-runtime-state.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -88,6 +90,7 @@ The current contract defines:
 - host-owned transition proposal review entrypoint
 - returned-copy plan state transition apply result
 - host-owned current-run transition boundary
+- host-owned in-memory plan state holder
 
 ## PlanSpec
 
@@ -515,6 +518,43 @@ automatic planning. It does not call a model, execute a lane, register a tool,
 or persist the returned `nextState`. Rejections and replan requests remain
 audited decisions, not hidden state mutations.
 
+## Host-Owned Runtime State Holder
+
+`createPlanHostRuntimeState()` defines the first current-run in-memory state
+holder for `PlanState`. It owns a copied `PlanSpec`, the current `PlanState`,
+and transition history for one host runtime instance.
+
+The state holder can:
+
+- return defensive copies of the current state, snapshot, and transition history
+- run `runHostPlanStateTransition()` against the current state
+- persist only `status: applied` transitions inside the current runtime
+  instance
+- record rejected, replan-requested, and blocked transitions without updating
+  the current state
+
+The state holder must not:
+
+- persist state outside the runtime instance
+- register MCP tools
+- expose model-visible state mutation
+- execute lanes or workflows
+- write TaskMemory, Archive, Workspace Memory, or plast-mem records
+- satisfy verification gates or mutation proof
+
+Every transition record must include:
+
+- `scope: current_run_plan_host_runtime_transition_record`
+- a monotonically increasing `sequence`
+- `previousState`
+- `nextState`
+- the audited transition result
+- `stateUpdated`
+- `mutatesPersistentState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -597,6 +637,8 @@ Consequences:
   it does not satisfy verification or mutation proof.
 - The host runtime transition boundary composes review and apply, but still
   cannot execute lanes or persist state by itself.
+- The in-memory runtime holder can persist current-run state inside one host
+  instance only; it still cannot write durable memory or satisfy proof gates.
 
 ## Reconciler Contract
 
@@ -624,6 +666,7 @@ decides whether the run can report success.
 - No automatic creation of `PlanSpec` or `PlanState`.
 - No automatic persistence of applied plan state.
 - No automatic host runtime loop scheduling.
+- No durable PlanState store.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
@@ -632,9 +675,9 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): persist accepted plan state in a host-owned runtime loop`
-   - Persist returned state only when a host/runtime owns lifecycle storage,
-     audit metadata, and explicit rejection/replan paths.
+1. `feat(computer-use-mcp): expose host-owned plan runtime state to an explicit caller`
+   - Thread the runtime state holder only through an explicit host-owned entry
+     point; do not make it model-visible by default.
 
 2. `feat(computer-use-mcp): wire host-owned plan state into multi-lane workflow runs`
    - Persist accepted returned state only when a host/runtime owns the run state
