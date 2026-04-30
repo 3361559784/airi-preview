@@ -58,6 +58,8 @@ The tested contract lives in:
 - `src/planning-orchestration/session-replay.test.ts`
 - `src/planning-orchestration/host-planner-recovery-policy.ts`
 - `src/planning-orchestration/host-planner-recovery-policy.test.ts`
+- `src/planning-orchestration/replacement-plan-projection.ts`
+- `src/planning-orchestration/replacement-plan-projection.test.ts`
 - `src/planning-orchestration/workflow-evidence.ts`
 - `src/planning-orchestration/workflow-evidence.test.ts`
 - `src/planning-orchestration/workflow-reconciliation.ts`
@@ -115,6 +117,7 @@ The current contract defines:
 - bounded plan runtime session projection shape
 - deterministic plan session recovery replay shape
 - host planner recovery policy shape
+- bounded replacement plan request projection shape
 
 ## PlanSpec
 
@@ -928,6 +931,49 @@ gates. It only decides whether the next host-owned step may ask for a
 replacement plan, must wait for host approval, must fail the recovery attempt,
 or must add deterministic replay coverage first.
 
+## Replacement Plan Request Projection
+
+`projectReplacementPlanRequestForPrompt()` defines how a host/planner
+replacement-plan request may be shown as bounded guidance.
+
+Input:
+
+- `PlanHostPlannerReplacementPlanRequest`
+
+The projection block must include:
+
+- `Replacement plan request (runtime guidance, not authority):`
+- guidance-not-authority boundary lines
+- a statement that the request asks for a host/planner supplied replacement
+  `PlanSpec` but does not create one
+- a statement that replacement `PlanSpec` validation stays with the host-owned
+  recovery boundary
+- projection status
+- authority metadata
+- session id, generation, trigger, active goal/current step, and reason
+- bounded recovery boundaries
+
+The metadata must include:
+
+- `scope: current_run_plan_replacement_plan_request_projection`
+- `included: true`
+- `status: active | stale | superseded`
+- character and boundary counts
+- `authoritySource: plan_state_reconciler_decision`
+- `acceptsHostSuppliedPlanSpecOnly: true`
+- `mayCreatePlanSpec: false`
+- `mayMutatePlanState: false`
+- `mutatesPersistentState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This is projection only. It must not include a replacement `PlanSpec`, create a
+workflow mapping, mutate a session, write durable memory, or expose a
+model-visible replacement-plan submission surface. A future host/planner may use
+the projection as context for drafting a replacement plan, but the plan must be
+supplied and validated through a separate host-owned boundary.
+
 ## Trust Label
 
 Any model-visible plan block must start with:
@@ -995,6 +1041,8 @@ Consequences:
 - Host planner recovery policy can request a host-supplied replacement plan,
   require host approval, fail a recovery attempt, or demand deterministic
   replay, but it still cannot create plans, mutate sessions, or execute lanes.
+- Replacement plan request projection can show the request to a future
+  host/planner, but it cannot create or accept the replacement plan.
 
 ## Reconciler Contract
 
@@ -1032,6 +1080,8 @@ decides whether the run can report success.
 - No model-visible replacement-plan submission surface.
 - No automatic session recovery from replay rows.
 - No automatic replacement plan generation from recovery policy.
+- No replacement PlanSpec generation from request projection.
+- No model-visible replacement-plan request projection control surface.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
@@ -1044,7 +1094,6 @@ decides whether the run can report success.
    - Only after recovery policy is explicit, define a host-side surface for
      applying recovery decisions. Do not expose it to the model loop by default.
 
-2. `test(computer-use-mcp): define replacement plan request projection contract`
-   - If a host/planner needs model assistance to draft a replacement `PlanSpec`,
-     project the request as bounded guidance without granting execution or
-     mutation authority.
+2. `feat(computer-use-mcp): project replacement plan request into host planner context`
+   - If a host planner model is introduced, wire this projection into that host
+     context only. Do not add it to the coding-runner model loop by default.
