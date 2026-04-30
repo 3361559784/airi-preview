@@ -74,6 +74,8 @@ The tested contract lives in:
 - `src/planning-orchestration/runtime-replan.test.ts`
 - `src/planning-orchestration/runtime-session.ts`
 - `src/planning-orchestration/runtime-session.test.ts`
+- `src/planning-orchestration/session-projection.ts`
+- `src/planning-orchestration/session-projection.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -103,6 +105,7 @@ The current contract defines:
 - bounded plan runtime recovery and replan request
 - host-supplied replacement plan acceptance boundary
 - host-owned current-run plan runtime session boundary
+- bounded plan runtime session projection shape
 
 ## PlanSpec
 
@@ -708,6 +711,43 @@ The session owns current-run composition only; it does not create replacement
 plans, route lanes, execute workflows, write memory, or expose a model-visible
 mutation surface.
 
+## Runtime Session Projection
+
+`projectPlanRuntimeSessionForPrompt()` defines how a host-owned current-run
+planning session may be summarized for model context.
+
+The projection accepts a `PlanHostRuntimeSessionSnapshot` and emits a bounded
+text block plus metadata. It is separate from session control. It cannot call
+`transition()`, call `replacePlan()`, route lanes, or execute workflows.
+
+The block must say:
+
+- `Plan runtime session summary (runtime guidance, not authority):`
+- session history is current-run guidance only
+- session history must not be persisted to Workspace Memory, Archive, or
+  plast-mem
+- session generation and event claims cannot execute lanes or satisfy
+  completion proof
+
+The metadata must include:
+
+- `scope: current_run_plan_runtime_session_projection`
+- `included: true`
+- projection `status`
+- active generation
+- transition count
+- replacement count
+- projected/omitted event counts
+- `authoritySource: plan_state_reconciler_decision`
+- `mutatesPersistentState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This projection may help a future runner understand current-run orchestration
+state, but it is still lower authority than trusted tool evidence and the
+verification gate.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -801,6 +841,8 @@ Consequences:
 - A host runtime session can compose initial and replacement runtime holders
   into one current-run history, but it still cannot execute lanes, persist
   state, or satisfy proof gates.
+- A projected session summary can inform the model about current-run session
+  history, but it still cannot control the session or prove completion.
 
 ## Reconciler Contract
 
@@ -832,6 +874,7 @@ decides whether the run can report success.
 - No durable plan runtime session store.
 - No model-visible plan state mutation caller.
 - No model-visible plan runtime session control surface.
+- No model-visible session projection control surface.
 - No automatic PlanSpec generation during recovery.
 - No model-visible replacement-plan submission surface.
 - No Workspace Memory write.
@@ -842,10 +885,10 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): wire host-owned plan session into multi-lane workflow runs`
+1. `feat(computer-use-mcp): project plan session summaries into coding context`
+   - Wire only bounded session summaries into context projection; do not expose
+     session mutation or workflow execution controls by default.
+
+2. `feat(computer-use-mcp): wire host-owned plan session into multi-lane workflow runs`
    - Use the session boundary as the current-run state/audit owner for explicit
      workflow reconciliation, replacement-plan, and transition events.
-
-2. `test(computer-use-mcp): define plan session projection contract`
-   - Define how a bounded session summary can enter model context as runtime
-     guidance, not authority.
