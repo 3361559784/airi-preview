@@ -56,6 +56,8 @@ The tested contract lives in:
 - `src/planning-orchestration/workflow-session.test.ts`
 - `src/planning-orchestration/session-replay.ts`
 - `src/planning-orchestration/session-replay.test.ts`
+- `src/planning-orchestration/host-planner-recovery-policy.ts`
+- `src/planning-orchestration/host-planner-recovery-policy.test.ts`
 - `src/planning-orchestration/workflow-evidence.ts`
 - `src/planning-orchestration/workflow-evidence.test.ts`
 - `src/planning-orchestration/workflow-reconciliation.ts`
@@ -112,6 +114,7 @@ The current contract defines:
 - host-owned current-run plan runtime session boundary
 - bounded plan runtime session projection shape
 - deterministic plan session recovery replay shape
+- host planner recovery policy shape
 
 ## PlanSpec
 
@@ -876,6 +879,55 @@ TaskMemory, Archive, Workspace Memory, plast-mem, prompt authority, or MCP tool
 schemas. Unknown rows must route to a deterministic replay follow-up before any
 runtime recovery behavior is expanded.
 
+## Host Planner Recovery Policy
+
+`derivePlanHostPlannerRecoveryPolicy()` maps a deterministic session replay row
+to a host/planner next-action policy. It is still contract-only and current-run
+only.
+
+The policy decision can be:
+
+- `request_replacement_plan`
+- `require_host_approval`
+- `fail_recovery_attempt`
+- `deterministic_replay_required`
+
+The mapping is intentionally conservative:
+
+- host-requested replans can request a host/planner supplied replacement plan
+- workflow execution blocked or reconciliation skipped can request replacement
+  route planning
+- rejected transitions require explicit host approval/direction
+- host-entry blocked transitions require host metadata/proposal review before
+  replanning
+- apply-only blocked transitions fail the current recovery attempt
+- blocked replacement attempts fail the current recovery attempt and must not
+  loop into automatic replacement generation
+- unknown replay rows require deterministic replay before runtime recovery
+  changes
+
+When the policy requests a replacement plan, it emits a bounded
+`current_run_plan_replacement_plan_request` with:
+
+- session id and generation
+- active goal/current step preview
+- replay trigger
+- reason
+- recovery boundaries
+- `acceptsHostSuppliedPlanSpecOnly: true`
+- `mayCreatePlanSpec: false`
+- `mayMutatePlanState: false`
+- `mutatesPersistentState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+The policy result must not include a replacement `PlanSpec`, mutate a session,
+execute workflows, create MCP tools, write durable memory, or satisfy proof
+gates. It only decides whether the next host-owned step may ask for a
+replacement plan, must wait for host approval, must fail the recovery attempt,
+or must add deterministic replay coverage first.
+
 ## Trust Label
 
 Any model-visible plan block must start with:
@@ -940,6 +992,9 @@ Consequences:
   result still cannot bypass approval or verification gates.
 - Plan session recovery replay can classify blocked/rejected/replan histories,
   but it cannot recover the session, execute lanes, or write memory.
+- Host planner recovery policy can request a host-supplied replacement plan,
+  require host approval, fail a recovery attempt, or demand deterministic
+  replay, but it still cannot create plans, mutate sessions, or execute lanes.
 
 ## Reconciler Contract
 
@@ -976,6 +1031,7 @@ decides whether the run can report success.
 - No automatic PlanSpec generation during recovery.
 - No model-visible replacement-plan submission surface.
 - No automatic session recovery from replay rows.
+- No automatic replacement plan generation from recovery policy.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
@@ -984,10 +1040,11 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `test(computer-use-mcp): define host planner recovery policy contract`
-   - Decide which classified replay rows may request a replacement plan, and
-     which must fail or wait for host approval.
-
-2. `feat(computer-use-mcp): expose host-owned plan session control surface`
+1. `feat(computer-use-mcp): expose host-owned plan session control surface`
    - Only after recovery policy is explicit, define a host-side surface for
      applying recovery decisions. Do not expose it to the model loop by default.
+
+2. `test(computer-use-mcp): define replacement plan request projection contract`
+   - If a host/planner needs model assistance to draft a replacement `PlanSpec`,
+     project the request as bounded guidance without granting execution or
+     mutation authority.
