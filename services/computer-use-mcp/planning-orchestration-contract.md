@@ -62,6 +62,8 @@ The tested contract lives in:
 - `src/planning-orchestration/host-entrypoint.test.ts`
 - `src/planning-orchestration/state-apply.ts`
 - `src/planning-orchestration/state-apply.test.ts`
+- `src/planning-orchestration/host-runtime.ts`
+- `src/planning-orchestration/host-runtime.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -85,6 +87,7 @@ The current contract defines:
 - deterministic plan state transition proposal shape
 - host-owned transition proposal review entrypoint
 - returned-copy plan state transition apply result
+- host-owned current-run transition boundary
 
 ## PlanSpec
 
@@ -484,6 +487,34 @@ This still is not a runner loop. A host may choose to persist or discard the
 returned `nextState`, but this helper does not write Workspace Memory,
 TaskMemory, Archive, plast-mem, workflow state, or MCP-visible state.
 
+## Host-Owned Runtime Transition Boundary
+
+`runHostPlanStateTransition()` composes the host-owned review boundary with the
+returned-copy apply helper. It accepts:
+
+- `PlanSpec`
+- current-run `PlanState`
+- `PlanStateTransitionProposal`
+- host decision metadata
+
+The boundary returns:
+
+- `scope: current_run_plan_host_runtime_transition`
+- `status: applied | rejected | replan_requested | blocked | skipped`
+- `hostEntry` from `reviewPlanStateTransitionProposal()`
+- `applyResult` from `applyAcceptedPlanStateTransition()`
+- `nextState` copied from the apply result
+- `mutatesInputPlanState: false`
+- `mutatesPersistentState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This is the first host-owned current-run runtime boundary, but it is still not
+automatic planning. It does not call a model, execute a lane, register a tool,
+or persist the returned `nextState`. Rejections and replan requests remain
+audited decisions, not hidden state mutations.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -564,6 +595,8 @@ Consequences:
 - Reconciled plan evidence cannot satisfy the verification gate by itself.
 - Applying an accepted transition only updates returned current-run plan state;
   it does not satisfy verification or mutation proof.
+- The host runtime transition boundary composes review and apply, but still
+  cannot execute lanes or persist state by itself.
 
 ## Reconciler Contract
 
@@ -590,6 +623,7 @@ decides whether the run can report success.
 - No MCP schema or tool-surface change.
 - No automatic creation of `PlanSpec` or `PlanState`.
 - No automatic persistence of applied plan state.
+- No automatic host runtime loop scheduling.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
@@ -598,9 +632,9 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): apply accepted plan transitions in a host-owned runtime loop`
-   - Add state mutation only behind a host-owned boundary with audit metadata
-     and explicit rejection/replan paths.
+1. `feat(computer-use-mcp): persist accepted plan state in a host-owned runtime loop`
+   - Persist returned state only when a host/runtime owns lifecycle storage,
+     audit metadata, and explicit rejection/replan paths.
 
 2. `feat(computer-use-mcp): wire host-owned plan state into multi-lane workflow runs`
    - Persist accepted returned state only when a host/runtime owns the run state
