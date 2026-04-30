@@ -70,6 +70,8 @@ The tested contract lives in:
 - `src/planning-orchestration/host-workflow-caller.test.ts`
 - `src/planning-orchestration/runtime-recovery.ts`
 - `src/planning-orchestration/runtime-recovery.test.ts`
+- `src/planning-orchestration/runtime-replan.ts`
+- `src/planning-orchestration/runtime-replan.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -97,6 +99,7 @@ The current contract defines:
 - host-owned in-memory plan state holder
 - explicit host workflow reconciliation caller
 - bounded plan runtime recovery and replan request
+- host-supplied replacement plan acceptance boundary
 
 ## PlanSpec
 
@@ -623,6 +626,43 @@ This keeps replanning as an explicit host step. The recovery layer does not
 call a planner model, invent lane mappings, replace `PlanState`, or export
 failed plan state into TaskMemory, Archive, Workspace Memory, or plast-mem.
 
+## Host-Supplied Replacement Plan Acceptance
+
+`acceptHostSuppliedReplacementPlan()` defines the first boundary for accepting a
+replacement `PlanSpec` after recovery requested replanning.
+
+The function accepts:
+
+- a `replan_required` recovery request
+- a host-supplied replacement `PlanSpec`
+- a host-supplied replacement initial `PlanState`
+- host actor and rationale
+
+It can create a new current-run `PlanHostRuntimeStateController`, but it must
+not generate the replacement plan. It validates host metadata, basic plan
+structure, duplicate step ids, and initial state references before creating the
+new runtime holder.
+
+The replacement record must include:
+
+- `scope: current_run_plan_runtime_replacement`
+- `status: accepted | blocked`
+- trimmed actor and rationale
+- recovery status and trigger
+- previous plan/state when available from recovery input
+- replacement runtime snapshot only when accepted
+- `acceptsHostSuppliedPlanSpecOnly: true`
+- `mayCreatePlanSpec: false`
+- `mayMutatePreviousPlanState: false`
+- `mutatesPersistentState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This boundary is still not automatic replanning. A future host/planner must
+produce the replacement `PlanSpec` explicitly; this package only validates and
+holds it for the current run.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -711,6 +751,8 @@ Consequences:
   a host supplies decision metadata; it still cannot execute workflows.
 - Runtime recovery can request replanning for blocked or replan-requested
   transitions, but it cannot create a replacement `PlanSpec`.
+- Replacement plan acceptance can create a new in-memory runtime holder only
+  from host-supplied `PlanSpec` and `PlanState`.
 
 ## Reconciler Contract
 
@@ -741,6 +783,7 @@ decides whether the run can report success.
 - No durable PlanState store.
 - No model-visible plan state mutation caller.
 - No automatic PlanSpec generation during recovery.
+- No model-visible replacement-plan submission surface.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
@@ -753,6 +796,6 @@ decides whether the run can report success.
    - Persist accepted returned state only when a host/runtime owns the run state
      lifecycle and audit boundary.
 
-2. `feat(computer-use-mcp): accept host-supplied replacement PlanSpec`
-   - Accept replacement plans only from a host-owned boundary; do not let
-     recovery generate them automatically.
+2. `test(computer-use-mcp): define host-owned plan runtime session contract`
+   - Define how initial plan, replacement plan, runtime state holder, and
+     transition history are composed into one current-run host session.
