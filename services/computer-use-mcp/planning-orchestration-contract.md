@@ -52,6 +52,8 @@ The tested contract lives in:
 - `src/planning-orchestration/workflow-mapping.test.ts`
 - `src/planning-orchestration/workflow-execution.ts`
 - `src/planning-orchestration/workflow-execution.test.ts`
+- `src/planning-orchestration/workflow-session.ts`
+- `src/planning-orchestration/workflow-session.test.ts`
 - `src/planning-orchestration/workflow-evidence.ts`
 - `src/planning-orchestration/workflow-evidence.test.ts`
 - `src/planning-orchestration/workflow-reconciliation.ts`
@@ -94,6 +96,7 @@ The current contract defines:
 - deterministic plan route to workflow handoff shape
 - deterministic plan handoff to workflow template mapping shape
 - explicit mapped workflow execution boundary
+- explicit mapped workflow execution to host session boundary
 - deterministic workflow execution to plan evidence observation bridge
 - explicit workflow execution reconciliation summary
 - deterministic plan state transition proposal shape
@@ -801,6 +804,38 @@ Decision precedence is deterministic:
 contract believes the expected current-run evidence is present. The verification
 gate remains the completion authority.
 
+## Host Session Workflow Run
+
+`executeMappedPlanWorkflowForHostSession()` is the first explicit wiring between
+mapped workflow execution and a host-owned current-run plan session.
+
+It performs this sequence:
+
+1. read the active plan/state snapshot from `PlanHostRuntimeSessionController`
+2. execute a previously mapped `WorkflowDefinition` through
+   `executeMappedPlanWorkflow()`
+3. reconcile workflow results through `reconcilePlanWorkflowExecution()`
+4. apply the resulting transition proposal to the session only when an explicit
+   host decision is supplied
+
+The result must include:
+
+- `scope: current_run_plan_host_session_workflow_run`
+- workflow execution result
+- workflow reconciliation result
+- optional session transition event
+- before/after session snapshots
+- skipped problems when reconciliation is unavailable
+- `mutatesPersistentState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This helper can execute workflow steps because it delegates to the existing
+workflow engine, but the helper result itself still cannot satisfy completion
+proof. It does not create plans, create mappings, approve actions, expose a
+model-visible session control surface, or persist session state.
+
 ## Trust Label
 
 Any model-visible plan block must start with:
@@ -860,6 +895,9 @@ Consequences:
   history, but it still cannot control the session or prove completion.
 - The coding context projection may include bounded session summaries, but this
   is still prompt context only and not a session control channel.
+- Host session workflow wiring can execute explicitly mapped workflow steps and
+  record the reconciled transition in current-run session history, but its
+  result still cannot bypass approval or verification gates.
 
 ## Reconciler Contract
 
@@ -883,6 +921,7 @@ decides whether the run can report success.
 - No default model-visible cross-lane execution tool.
 - No generic MCP workflow execution tool.
 - No runtime lane router execution.
+- No model-visible host session workflow run tool.
 - No MCP schema or tool-surface change.
 - No automatic creation of `PlanSpec` or `PlanState`.
 - No automatic persistence of applied plan state.
