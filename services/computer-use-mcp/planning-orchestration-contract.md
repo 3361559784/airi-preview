@@ -66,6 +66,8 @@ The tested contract lives in:
 - `src/planning-orchestration/host-runtime.test.ts`
 - `src/planning-orchestration/host-runtime-state.ts`
 - `src/planning-orchestration/host-runtime-state.test.ts`
+- `src/planning-orchestration/host-workflow-caller.ts`
+- `src/planning-orchestration/host-workflow-caller.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -91,6 +93,7 @@ The current contract defines:
 - returned-copy plan state transition apply result
 - host-owned current-run transition boundary
 - host-owned in-memory plan state holder
+- explicit host workflow reconciliation caller
 
 ## PlanSpec
 
@@ -555,6 +558,35 @@ Every transition record must include:
 - `maySatisfyVerificationGate: false`
 - `maySatisfyMutationProof: false`
 
+## Explicit Host Workflow Reconciliation Caller
+
+`applyWorkflowReconciliationTransitionForHost()` defines the first explicit
+caller that can feed workflow reconciliation output into host-owned runtime
+state. It accepts:
+
+- a `PlanHostRuntimeStateController`
+- a `PlanWorkflowReconciliationResult`
+- host decision metadata
+
+It only calls the runtime state holder when reconciliation is included and a
+`transitionProposal` is present. Otherwise it returns `status: skipped` and
+does not append runtime history.
+
+The result must include:
+
+- `scope: current_run_plan_host_workflow_reconciliation_caller`
+- `status: applied | rejected | replan_requested | blocked | skipped`
+- optional `transitionRecord`
+- current runtime `snapshot`
+- skipped problems when no transition can be applied
+- `mutatesPersistentState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This explicit caller is still host-owned. It is not registered as an MCP tool,
+not exposed to the coding-runner model loop, and not a workflow executor.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -639,6 +671,8 @@ Consequences:
   cannot execute lanes or persist state by itself.
 - The in-memory runtime holder can persist current-run state inside one host
   instance only; it still cannot write durable memory or satisfy proof gates.
+- The explicit workflow reconciliation caller can update that holder only when
+  a host supplies decision metadata; it still cannot execute workflows.
 
 ## Reconciler Contract
 
@@ -667,6 +701,7 @@ decides whether the run can report success.
 - No automatic persistence of applied plan state.
 - No automatic host runtime loop scheduling.
 - No durable PlanState store.
+- No model-visible plan state mutation caller.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
@@ -675,10 +710,10 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): expose host-owned plan runtime state to an explicit caller`
-   - Thread the runtime state holder only through an explicit host-owned entry
-     point; do not make it model-visible by default.
-
-2. `feat(computer-use-mcp): wire host-owned plan state into multi-lane workflow runs`
+1. `feat(computer-use-mcp): wire host-owned plan state into multi-lane workflow runs`
    - Persist accepted returned state only when a host/runtime owns the run state
      lifecycle and audit boundary.
+
+2. `test(computer-use-mcp): define plan runtime recovery and replan contract`
+   - Define how blocked/replan-requested runtime transitions create a new
+     PlanSpec without mutating old state or memory.
