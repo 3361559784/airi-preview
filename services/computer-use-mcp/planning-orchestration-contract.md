@@ -54,6 +54,8 @@ The tested contract lives in:
 - `src/planning-orchestration/workflow-execution.test.ts`
 - `src/planning-orchestration/workflow-session.ts`
 - `src/planning-orchestration/workflow-session.test.ts`
+- `src/planning-orchestration/session-replay.ts`
+- `src/planning-orchestration/session-replay.test.ts`
 - `src/planning-orchestration/workflow-evidence.ts`
 - `src/planning-orchestration/workflow-evidence.test.ts`
 - `src/planning-orchestration/workflow-reconciliation.ts`
@@ -109,6 +111,7 @@ The current contract defines:
 - host-supplied replacement plan acceptance boundary
 - host-owned current-run plan runtime session boundary
 - bounded plan runtime session projection shape
+- deterministic plan session recovery replay shape
 
 ## PlanSpec
 
@@ -836,6 +839,43 @@ workflow engine, but the helper result itself still cannot satisfy completion
 proof. It does not create plans, create mappings, approve actions, expose a
 model-visible session control surface, or persist session state.
 
+## Plan Session Recovery Replay
+
+`normalizePlanSessionRecoveryReplay()` defines a deterministic replay row for
+blocked or unresolved host-owned plan session histories.
+
+Inputs:
+
+- `PlanHostRuntimeSessionSnapshot`
+- optional `PlanHostSessionWorkflowRunResult`
+
+The normalizer is pure and bounded. It may classify:
+
+- blocked host transitions
+- rejected host transitions
+- host-requested replan transitions
+- blocked replacement plan acceptance
+- blocked mapped workflow execution
+- skipped workflow reconciliation
+- unknown recovery signals
+
+The replay row must include:
+
+- `scope: current_run_plan_session_recovery_replay`
+- `source: host_plan_runtime_session`
+- session id, generation, active goal/current step, and event counts
+- bounded latest event and workflow-run summaries
+- deterministic failure class, anchor, and next follow-up
+- `mutatesPersistentState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This replay row is local triage evidence only. It must not be inserted into
+TaskMemory, Archive, Workspace Memory, plast-mem, prompt authority, or MCP tool
+schemas. Unknown rows must route to a deterministic replay follow-up before any
+runtime recovery behavior is expanded.
+
 ## Trust Label
 
 Any model-visible plan block must start with:
@@ -898,6 +938,8 @@ Consequences:
 - Host session workflow wiring can execute explicitly mapped workflow steps and
   record the reconciled transition in current-run session history, but its
   result still cannot bypass approval or verification gates.
+- Plan session recovery replay can classify blocked/rejected/replan histories,
+  but it cannot recover the session, execute lanes, or write memory.
 
 ## Reconciler Contract
 
@@ -933,6 +975,7 @@ decides whether the run can report success.
 - No model-visible session projection control surface.
 - No automatic PlanSpec generation during recovery.
 - No model-visible replacement-plan submission surface.
+- No automatic session recovery from replay rows.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
@@ -941,10 +984,10 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): wire host-owned plan session into multi-lane workflow runs`
-   - Use the session boundary as the current-run state/audit owner for explicit
-     workflow reconciliation, replacement-plan, and transition events.
+1. `test(computer-use-mcp): define host planner recovery policy contract`
+   - Decide which classified replay rows may request a replacement plan, and
+     which must fail or wait for host approval.
 
-2. `test(computer-use-mcp): define plan session recovery replay contract`
-   - Capture failed/blocked session histories as deterministic replay evidence
-     before expanding runtime recovery behavior.
+2. `feat(computer-use-mcp): expose host-owned plan session control surface`
+   - Only after recovery policy is explicit, define a host-side surface for
+     applying recovery decisions. Do not expose it to the model loop by default.
