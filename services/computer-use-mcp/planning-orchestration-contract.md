@@ -68,6 +68,8 @@ The tested contract lives in:
 - `src/planning-orchestration/host-runtime-state.test.ts`
 - `src/planning-orchestration/host-workflow-caller.ts`
 - `src/planning-orchestration/host-workflow-caller.test.ts`
+- `src/planning-orchestration/runtime-recovery.ts`
+- `src/planning-orchestration/runtime-recovery.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -94,6 +96,7 @@ The current contract defines:
 - host-owned current-run transition boundary
 - host-owned in-memory plan state holder
 - explicit host workflow reconciliation caller
+- bounded plan runtime recovery and replan request
 
 ## PlanSpec
 
@@ -587,6 +590,39 @@ The result must include:
 This explicit caller is still host-owned. It is not registered as an MCP tool,
 not exposed to the coding-runner model loop, and not a workflow executor.
 
+## Runtime Recovery And Replan Request
+
+`derivePlanRuntimeRecoveryRequest()` defines the first recovery contract for
+blocked or host-requested replanning after workflow reconciliation.
+
+The function consumes a `PlanHostWorkflowCallerResult` and returns either:
+
+- `status: not_required`
+- `status: replan_required`
+
+Recovery is required only when:
+
+- the caller status is `blocked`
+- the caller status is `replan_requested`
+
+The recovery request may include `replanInput` with the previous goal, previous
+plan, current state, trigger, reason, blocked summaries, and boundary lines.
+This data is for a future host/planner to use as input. It is not a generated
+replacement plan.
+
+The recovery contract must include:
+
+- `scope: current_run_plan_runtime_recovery_request`
+- `mayCreatePlanSpec: false`
+- `mayMutatePlanState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This keeps replanning as an explicit host step. The recovery layer does not
+call a planner model, invent lane mappings, replace `PlanState`, or export
+failed plan state into TaskMemory, Archive, Workspace Memory, or plast-mem.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -673,6 +709,8 @@ Consequences:
   instance only; it still cannot write durable memory or satisfy proof gates.
 - The explicit workflow reconciliation caller can update that holder only when
   a host supplies decision metadata; it still cannot execute workflows.
+- Runtime recovery can request replanning for blocked or replan-requested
+  transitions, but it cannot create a replacement `PlanSpec`.
 
 ## Reconciler Contract
 
@@ -702,6 +740,7 @@ decides whether the run can report success.
 - No automatic host runtime loop scheduling.
 - No durable PlanState store.
 - No model-visible plan state mutation caller.
+- No automatic PlanSpec generation during recovery.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
@@ -714,6 +753,6 @@ decides whether the run can report success.
    - Persist accepted returned state only when a host/runtime owns the run state
      lifecycle and audit boundary.
 
-2. `test(computer-use-mcp): define plan runtime recovery and replan contract`
-   - Define how blocked/replan-requested runtime transitions create a new
-     PlanSpec without mutating old state or memory.
+2. `feat(computer-use-mcp): accept host-supplied replacement PlanSpec`
+   - Accept replacement plans only from a host-owned boundary; do not let
+     recovery generate them automatically.
