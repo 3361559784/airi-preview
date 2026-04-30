@@ -60,6 +60,8 @@ The tested contract lives in:
 - `src/planning-orchestration/state-transition.test.ts`
 - `src/planning-orchestration/host-entrypoint.ts`
 - `src/planning-orchestration/host-entrypoint.test.ts`
+- `src/planning-orchestration/state-apply.ts`
+- `src/planning-orchestration/state-apply.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -82,6 +84,7 @@ The current contract defines:
 - explicit workflow execution reconciliation summary
 - deterministic plan state transition proposal shape
 - host-owned transition proposal review entrypoint
+- returned-copy plan state transition apply result
 
 ## PlanSpec
 
@@ -448,6 +451,39 @@ defines what a host-owned orchestration boundary must validate before a future
 runtime loop can apply state transitions. Rejecting or requesting replan does
 not validate operation applicability because no operations are applied.
 
+## Accepted Plan State Apply Result
+
+`applyAcceptedPlanStateTransition()` defines the first deterministic apply
+shape for host-accepted transition records. It consumes current-run `PlanState`
+plus the audited result from `reviewPlanStateTransitionProposal()`.
+
+The apply result is deliberately narrow:
+
+- it applies only `status: accepted` + `decision: accept_transition`
+- it skips rejected or replan-requested records
+- it blocks already-blocked host records
+- it copies `PlanState` before applying operations
+- it returns `nextState` instead of mutating the input state
+- duplicate terminal step or blocker appends are idempotent
+
+The result must include:
+
+- `scope: current_run_plan_state_apply_result`
+- `status: applied | skipped | blocked`
+- `nextState`
+- applied operations
+- problems for skipped or blocked records
+- `appliesTo: returned_plan_state_copy`
+- `mutatesInputPlanState: false`
+- `mutatesPersistentState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This still is not a runner loop. A host may choose to persist or discard the
+returned `nextState`, but this helper does not write Workspace Memory,
+TaskMemory, Archive, plast-mem, workflow state, or MCP-visible state.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -526,6 +562,8 @@ Consequences:
 - A plan cannot bypass approval or verification gates.
 - A stale or superseded plan cannot delete or override current-run evidence.
 - Reconciled plan evidence cannot satisfy the verification gate by itself.
+- Applying an accepted transition only updates returned current-run plan state;
+  it does not satisfy verification or mutation proof.
 
 ## Reconciler Contract
 
@@ -551,6 +589,7 @@ decides whether the run can report success.
 - No runtime lane router execution.
 - No MCP schema or tool-surface change.
 - No automatic creation of `PlanSpec` or `PlanState`.
+- No automatic persistence of applied plan state.
 - No Workspace Memory write.
 - No TaskMemory merge.
 - No plast-mem export or ingestion.
@@ -559,10 +598,10 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): wire plan reconciliation into an explicit workflow`
-   - Consume current-run observations only after workflow mapping and approval
-     boundaries are explicit.
-
-2. `feat(computer-use-mcp): apply accepted plan transitions in a host-owned runtime loop`
+1. `feat(computer-use-mcp): apply accepted plan transitions in a host-owned runtime loop`
    - Add state mutation only behind a host-owned boundary with audit metadata
      and explicit rejection/replan paths.
+
+2. `feat(computer-use-mcp): wire host-owned plan state into multi-lane workflow runs`
+   - Persist accepted returned state only when a host/runtime owns the run state
+     lifecycle and audit boundary.
