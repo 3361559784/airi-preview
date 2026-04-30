@@ -72,6 +72,8 @@ The tested contract lives in:
 - `src/planning-orchestration/runtime-recovery.test.ts`
 - `src/planning-orchestration/runtime-replan.ts`
 - `src/planning-orchestration/runtime-replan.test.ts`
+- `src/planning-orchestration/runtime-session.ts`
+- `src/planning-orchestration/runtime-session.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -100,6 +102,7 @@ The current contract defines:
 - explicit host workflow reconciliation caller
 - bounded plan runtime recovery and replan request
 - host-supplied replacement plan acceptance boundary
+- host-owned current-run plan runtime session boundary
 
 ## PlanSpec
 
@@ -663,6 +666,48 @@ This boundary is still not automatic replanning. A future host/planner must
 produce the replacement `PlanSpec` explicitly; this package only validates and
 holds it for the current run.
 
+## Host-Owned Runtime Session
+
+`createPlanHostRuntimeSession()` composes one current-run planning session from:
+
+- an initial `PlanSpec`
+- an initial `PlanState`
+- the active `PlanHostRuntimeStateController`
+- transition events
+- host-supplied replacement-plan events
+
+The session is an in-memory runtime holder. It can switch the active runtime
+generation only when `acceptHostSuppliedReplacementPlan()` accepts a host-owned
+replacement. Blocked replacement attempts are recorded as current-run session
+events but do not switch the active plan.
+
+The session snapshot must include:
+
+- `scope: current_run_plan_host_runtime_session`
+- `sessionId`
+- current `generation`
+- initial runtime snapshot
+- active runtime snapshot
+- event count
+- transition count
+- replacement count
+- current-run event history
+- `mutatesPersistentState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+Session events must be either:
+
+- `transition`
+- `replacement`
+
+Transition events wrap host runtime transition records. Replacement events wrap
+replacement acceptance records and preserve previous/next runtime snapshots.
+The session owns current-run composition only; it does not create replacement
+plans, route lanes, execute workflows, write memory, or expose a model-visible
+mutation surface.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -753,6 +798,9 @@ Consequences:
   transitions, but it cannot create a replacement `PlanSpec`.
 - Replacement plan acceptance can create a new in-memory runtime holder only
   from host-supplied `PlanSpec` and `PlanState`.
+- A host runtime session can compose initial and replacement runtime holders
+  into one current-run history, but it still cannot execute lanes, persist
+  state, or satisfy proof gates.
 
 ## Reconciler Contract
 
@@ -781,7 +829,9 @@ decides whether the run can report success.
 - No automatic persistence of applied plan state.
 - No automatic host runtime loop scheduling.
 - No durable PlanState store.
+- No durable plan runtime session store.
 - No model-visible plan state mutation caller.
+- No model-visible plan runtime session control surface.
 - No automatic PlanSpec generation during recovery.
 - No model-visible replacement-plan submission surface.
 - No Workspace Memory write.
@@ -792,10 +842,10 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): wire host-owned plan state into multi-lane workflow runs`
-   - Persist accepted returned state only when a host/runtime owns the run state
-     lifecycle and audit boundary.
+1. `feat(computer-use-mcp): wire host-owned plan session into multi-lane workflow runs`
+   - Use the session boundary as the current-run state/audit owner for explicit
+     workflow reconciliation, replacement-plan, and transition events.
 
-2. `test(computer-use-mcp): define host-owned plan runtime session contract`
-   - Define how initial plan, replacement plan, runtime state holder, and
-     transition history are composed into one current-run host session.
+2. `test(computer-use-mcp): define plan session projection contract`
+   - Define how a bounded session summary can enter model context as runtime
+     guidance, not authority.
