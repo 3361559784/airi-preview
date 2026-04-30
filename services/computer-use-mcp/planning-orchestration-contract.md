@@ -58,6 +58,8 @@ The tested contract lives in:
 - `src/planning-orchestration/workflow-reconciliation.test.ts`
 - `src/planning-orchestration/state-transition.ts`
 - `src/planning-orchestration/state-transition.test.ts`
+- `src/planning-orchestration/host-entrypoint.ts`
+- `src/planning-orchestration/host-entrypoint.test.ts`
 - `src/coding-runner/transcript-runtime.ts`
 - `src/coding-runner/transcript-runtime.test.ts`
 
@@ -79,6 +81,7 @@ The current contract defines:
 - deterministic workflow execution to plan evidence observation bridge
 - explicit workflow execution reconciliation summary
 - deterministic plan state transition proposal shape
+- host-owned transition proposal review entrypoint
 
 ## PlanSpec
 
@@ -412,6 +415,39 @@ Workflow reconciliation includes a transition proposal only when explicit
 `PlanState` was supplied and workflow execution produced step results. The host
 or a future orchestration entrypoint must decide whether to apply it.
 
+## Host-Owned Orchestration Entry Point
+
+`reviewPlanStateTransitionProposal()` defines the first host-owned entrypoint
+contract for transition proposals. It accepts:
+
+- `PlanSpec`
+- current-run `PlanState`
+- `PlanStateTransitionProposal`
+- host decision metadata: `decision`, `actor`, and `rationale`
+
+Supported host decisions are:
+
+- `accept_transition`
+- `reject_transition`
+- `request_replan`
+
+The entrypoint returns an audited decision record:
+
+- `scope: current_run_plan_host_orchestration_entrypoint`
+- `status: accepted | rejected | blocked`
+- trimmed `actor` and `rationale`
+- accepted operations only when the host accepts a valid transition
+- validation problems for invalid accepted transitions
+- `mayMutatePlanState: false`
+- `mayExecute: false`
+- `maySatisfyVerificationGate: false`
+- `maySatisfyMutationProof: false`
+
+This contract deliberately does not apply operations to `PlanState`. It only
+defines what a host-owned orchestration boundary must validate before a future
+runtime loop can apply state transitions. Rejecting or requesting replan does
+not validate operation applicability because no operations are applied.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -527,6 +563,6 @@ decides whether the run can report success.
    - Consume current-run observations only after workflow mapping and approval
      boundaries are explicit.
 
-2. `feat(computer-use-mcp): add host-owned plan orchestration entrypoint`
-   - Add a host-controlled surface only if schema, approval, and audit
-     boundaries are explicit.
+2. `feat(computer-use-mcp): apply accepted plan transitions in a host-owned runtime loop`
+   - Add state mutation only behind a host-owned boundary with audit metadata
+     and explicit rejection/replan paths.
