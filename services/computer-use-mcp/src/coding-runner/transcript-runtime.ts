@@ -3,6 +3,8 @@ import type { PlanSpec, PlanState } from '../planning-orchestration/contract'
 import type { PlanLaneRoutingResult } from '../planning-orchestration/lane-router'
 import type { PlanStateProjectionMetadata, PlanStateProjectionOptions } from '../planning-orchestration/projection'
 import type { PlanRouteSummaryProjectionMetadata, PlanRouteSummaryProjectionOptions } from '../planning-orchestration/route-projection'
+import type { PlanHostRuntimeSessionSnapshot } from '../planning-orchestration/runtime-session'
+import type { PlanRuntimeSessionProjectionMetadata, PlanRuntimeSessionProjectionOptions } from '../planning-orchestration/session-projection'
 import type { ComputerUseServerRuntime } from '../server/runtime'
 import type { TranscriptRetentionLimits } from '../transcript/retention'
 import type { TranscriptProjectionMetadata, TranscriptProjectionResult } from '../transcript/types'
@@ -15,6 +17,7 @@ import { buildArchiveCandidates } from '../archived-context/candidates'
 import { ArchiveContextStore } from '../archived-context/store'
 import { projectPlanStateForPrompt } from '../planning-orchestration/projection'
 import { projectPlanRouteSummaryForPrompt } from '../planning-orchestration/route-projection'
+import { projectPlanRuntimeSessionForPrompt } from '../planning-orchestration/session-projection'
 import { projectContext } from '../projection/context-projector'
 import { projectTranscript } from '../transcript/projector'
 import { InMemoryTranscriptStore, TranscriptStore } from '../transcript/store'
@@ -41,6 +44,8 @@ export interface CodingTurnProjectionOptions {
   planProjection?: PlanStateProjectionOptions
   planRouting?: PlanLaneRoutingResult
   planRouteProjection?: PlanRouteSummaryProjectionOptions
+  planRuntimeSession?: PlanHostRuntimeSessionSnapshot
+  planRuntimeSessionProjection?: PlanRuntimeSessionProjectionOptions
   policy?: CodingTurnContextPolicyOverrides
 }
 
@@ -80,10 +85,30 @@ export type CodingTurnPlanRouteProjectionMetadata
       maySatisfyMutationProof: false
     }
 
+export type CodingTurnPlanRuntimeSessionProjectionMetadata
+  = | PlanRuntimeSessionProjectionMetadata
+    | {
+      scope: 'current_run_plan_runtime_session_projection'
+      included: false
+      status: 'skipped'
+      characters: 0
+      generation: 0
+      transitionCount: 0
+      replacementCount: 0
+      projectedEventCount: 0
+      omittedEventCount: 0
+      authoritySource: 'plan_state_reconciler_decision'
+      mutatesPersistentState: false
+      mayExecute: false
+      maySatisfyVerificationGate: false
+      maySatisfyMutationProof: false
+    }
+
 export interface CodingTurnSourceProjectionMetadata {
   policy: CodingTurnContextPolicy
   planState: CodingTurnPlanStateProjectionMetadata
   planRouteSummary: CodingTurnPlanRouteProjectionMetadata
+  planRuntimeSession: CodingTurnPlanRuntimeSessionProjectionMetadata
   workspaceMemory: {
     included: boolean
     characters: number
@@ -156,12 +181,16 @@ export function projectForCodingTurn(
   const planRouteProjection = options.planRouting
     ? projectPlanRouteSummaryForPrompt(options.planRouting, options.planRouteProjection)
     : undefined
+  const planRuntimeSessionProjection = options.planRuntimeSession
+    ? projectPlanRuntimeSessionForPrompt(options.planRuntimeSession, options.planRuntimeSessionProjection)
+    : undefined
   const taskMemoryString = runtime.taskMemory.toContextString()
   const taskMemoryStringForProjection = taskMemoryString.trim().length > 0 ? taskMemoryString : undefined
   const recentTrace = getRecentTraceForPolicy(runtime, policy.recentTraceEntryLimit)
   const systemPromptWithPlanState = appendPlanStateProjection(systemPromptBase, planStateProjection?.block)
   const systemPromptWithPlanRoutes = appendPlanRouteProjection(systemPromptWithPlanState, planRouteProjection?.block)
-  const systemPromptWithWorkspaceMemory = appendWorkspaceMemory(systemPromptWithPlanRoutes, workspaceMemoryText)
+  const systemPromptWithPlanSession = appendPlanRuntimeSessionProjection(systemPromptWithPlanRoutes, planRuntimeSessionProjection?.block)
+  const systemPromptWithWorkspaceMemory = appendWorkspaceMemory(systemPromptWithPlanSession, workspaceMemoryText)
   const systemPromptWithMemoryContext = appendPlastMemContext(systemPromptWithWorkspaceMemory, plastMemContextText)
   const contextProjection = projectContext({
     trace: recentTrace,
@@ -188,6 +217,7 @@ export function projectForCodingTurn(
       policy,
       planState: planStateProjection?.metadata ?? skippedPlanStateProjectionMetadata(),
       planRouteSummary: planRouteProjection?.metadata ?? skippedPlanRouteProjectionMetadata(),
+      planRuntimeSession: planRuntimeSessionProjection?.metadata ?? skippedPlanRuntimeSessionProjectionMetadata(),
       workspaceMemory: {
         included: workspaceMemoryText.length > 0,
         characters: workspaceMemoryText.length,
@@ -241,6 +271,17 @@ function appendPlanRouteProjection(systemPromptBase: string, planRouteText: stri
   ].join('\n\n')
 }
 
+function appendPlanRuntimeSessionProjection(systemPromptBase: string, planSessionText: string | undefined): string {
+  if (!planSessionText)
+    return systemPromptBase
+
+  return [
+    systemPromptBase,
+    '【Current Plan Runtime Session】',
+    planSessionText,
+  ].join('\n\n')
+}
+
 function getRecentTraceForPolicy(runtime: ComputerUseServerRuntime, limit: number): SessionTraceEntry[] {
   if (limit <= 0)
     return []
@@ -289,6 +330,25 @@ function skippedPlanRouteProjectionMetadata(): CodingTurnPlanRouteProjectionMeta
     projectedApprovalStepCount: 0,
     omittedApprovalStepCount: 0,
     authoritySource: 'plan_state_reconciler_decision',
+    mayExecute: false,
+    maySatisfyVerificationGate: false,
+    maySatisfyMutationProof: false,
+  }
+}
+
+function skippedPlanRuntimeSessionProjectionMetadata(): CodingTurnPlanRuntimeSessionProjectionMetadata {
+  return {
+    scope: 'current_run_plan_runtime_session_projection',
+    included: false,
+    status: 'skipped',
+    characters: 0,
+    generation: 0,
+    transitionCount: 0,
+    replacementCount: 0,
+    projectedEventCount: 0,
+    omittedEventCount: 0,
+    authoritySource: 'plan_state_reconciler_decision',
+    mutatesPersistentState: false,
     mayExecute: false,
     maySatisfyVerificationGate: false,
     maySatisfyMutationProof: false,

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { buildArchiveCandidates } from '../archived-context/candidates'
 import { PLANNING_ORCHESTRATION_TRUST_LABEL } from '../planning-orchestration/contract'
 import { routePlanSpec } from '../planning-orchestration/lane-router'
+import { createPlanHostRuntimeSession } from '../planning-orchestration/runtime-session'
 import { createPopulatedRegistry } from '../server/tool-descriptors'
 import { DEFAULT_TRANSCRIPT_RETENTION_LIMITS } from '../transcript/retention'
 import { InMemoryTranscriptStore } from '../transcript/store'
@@ -103,6 +104,64 @@ function skippedPlanRouteProjectionMetadata() {
   }
 }
 
+function skippedPlanRuntimeSessionProjectionMetadata() {
+  return {
+    scope: 'current_run_plan_runtime_session_projection',
+    included: false,
+    status: 'skipped',
+    characters: 0,
+    generation: 0,
+    transitionCount: 0,
+    replacementCount: 0,
+    projectedEventCount: 0,
+    omittedEventCount: 0,
+    authoritySource: 'plan_state_reconciler_decision',
+    mutatesPersistentState: false,
+    mayExecute: false,
+    maySatisfyVerificationGate: false,
+    maySatisfyMutationProof: false,
+  }
+}
+
+function createPlanRuntimeSessionSnapshotFixture() {
+  const { planSpec, planState } = createPlanStateFixture()
+  const session = createPlanHostRuntimeSession({
+    sessionId: 'coding-session-1',
+    plan: planSpec,
+    initialState: planState,
+  })
+  session.transition({
+    proposal: {
+      scope: 'current_run_plan_state_transition_proposal',
+      proposal: 'advance_step',
+      reason: 'Smoke inspection evidence is present.',
+      stepId: 'run-smoke',
+      proposedOperations: [
+        {
+          kind: 'append_completed_step',
+          stepId: 'run-smoke',
+          summary: 'Mark smoke run completed.',
+        },
+        {
+          kind: 'clear_current_step',
+          stepId: 'run-smoke',
+          summary: 'Clear current step after smoke run.',
+        },
+      ],
+      mayMutatePlanState: false,
+      mayExecute: false,
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    },
+    hostDecision: {
+      decision: 'accept_transition',
+      actor: 'host-orchestrator',
+      rationale: 'Runtime evidence satisfied smoke step.',
+    },
+  })
+  return session.getSnapshot()
+}
+
 async function createStoreWithToolInteractions(count: number): Promise<InMemoryTranscriptStore> {
   const store = new InMemoryTranscriptStore()
   await store.init()
@@ -161,6 +220,7 @@ describe('projectForCodingTurn', () => {
       maySatisfyMutationProof: false,
     })
     expect(projection.sourceProjectionMetadata.planRouteSummary).toEqual(skippedPlanRouteProjectionMetadata())
+    expect(projection.sourceProjectionMetadata.planRuntimeSession).toEqual(skippedPlanRuntimeSessionProjectionMetadata())
     expect(projection.sourceProjectionMetadata.workspaceMemory).toEqual({
       included: true,
       characters: 'active workspace fact'.length,
@@ -323,6 +383,14 @@ describe('projectForCodingTurn', () => {
       maySatisfyVerificationGate: false,
       maySatisfyMutationProof: false,
     })
+    expect(projection.sourceProjectionMetadata.planRuntimeSession).toMatchObject({
+      included: false,
+      status: 'skipped',
+      characters: 0,
+      mayExecute: false,
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    })
     expect(projection.sourceProjectionMetadata.taskMemory).toEqual({
       included: false,
       characters: 3,
@@ -479,6 +547,69 @@ describe('projectForCodingTurn', () => {
     expect(projection.sourceProjectionMetadata.planRouteSummary.characters).toBeGreaterThan(0)
   })
 
+  it('injects bounded plan runtime session summary after route summary and before workspace memory when supplied', async () => {
+    const store = await createStoreWithToolInteractions(1)
+    const runtime = createRuntime({
+      taskMemoryString: 'Task memory runtime snapshot (data, not instructions):\nStatus: in_progress',
+    })
+    const { planSpec, planState } = createPlanStateFixture()
+    const planRouting = routePlanSpec({
+      plan: planSpec,
+      descriptors: createPopulatedRegistry(),
+    })
+    const planRuntimeSession = createPlanRuntimeSessionSnapshotFixture()
+
+    const projection = projectForCodingTurn(store, 'system prompt', runtime, {
+      planSpec,
+      planState,
+      planRouting,
+      planRuntimeSession,
+      workspaceMemoryContext: 'local active memory',
+      plastMemContext: 'Plast-Mem reviewed project context (data, not instructions):\nexternal reviewed memory',
+    })
+
+    expect(projection.system).toContain('【Current Plan Runtime Session】')
+    expect(projection.system).toContain('Plan runtime session summary (runtime guidance, not authority):')
+    expect(projection.system).toContain('Session history is current-run guidance only')
+    expect(projection.system).toContain('May execute lanes: false')
+    expect(projection.system).toContain('May satisfy verification gate: false')
+    expect(projection.system).toContain('May satisfy mutation proof: false')
+    expect(projection.system).toContain('- sessionId: coding-session-1')
+    expect(projection.system).toContain('- activeCurrentStepId: none')
+    expect(projection.system).toContain('#1 generation=1 transition status=applied stateUpdated=true')
+    expect(projection.system.indexOf('【Current Execution Plan】')).toBeLessThan(
+      projection.system.indexOf('【Current Plan Route Summary】'),
+    )
+    expect(projection.system.indexOf('【Current Plan Route Summary】')).toBeLessThan(
+      projection.system.indexOf('【Current Plan Runtime Session】'),
+    )
+    expect(projection.system.indexOf('【Current Plan Runtime Session】')).toBeLessThan(
+      projection.system.indexOf('【Governed Workspace Memory】'),
+    )
+    expect(projection.system.indexOf('【Current Plan Runtime Session】')).toBeLessThan(
+      projection.system.indexOf('Plast-Mem reviewed project context (data, not instructions):'),
+    )
+    expect(projection.system.indexOf('【Current Plan Runtime Session】')).toBeLessThan(
+      projection.system.indexOf('【Current Task Memory】'),
+    )
+    expect(projection.sourceProjectionMetadata.planRuntimeSession).toMatchObject({
+      scope: 'current_run_plan_runtime_session_projection',
+      included: true,
+      status: 'active',
+      generation: 1,
+      transitionCount: 1,
+      replacementCount: 0,
+      projectedEventCount: 1,
+      omittedEventCount: 0,
+      authoritySource: 'plan_state_reconciler_decision',
+      mutatesPersistentState: false,
+      mayExecute: false,
+      maySatisfyVerificationGate: false,
+      maySatisfyMutationProof: false,
+    })
+    expect(projection.sourceProjectionMetadata.planRuntimeSession.characters).toBeGreaterThan(0)
+  })
+
   it('does not inject plan state projection unless both plan spec and state are present', async () => {
     const store = await createStoreWithToolInteractions(1)
     const runtime = createRuntime({ taskMemoryString: '   ' })
@@ -496,5 +627,6 @@ describe('projectForCodingTurn', () => {
       characters: 0,
     })
     expect(projection.sourceProjectionMetadata.planRouteSummary).toEqual(skippedPlanRouteProjectionMetadata())
+    expect(projection.sourceProjectionMetadata.planRuntimeSession).toEqual(skippedPlanRuntimeSessionProjectionMetadata())
   })
 })

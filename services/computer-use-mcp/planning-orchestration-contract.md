@@ -748,6 +748,21 @@ This projection may help a future runner understand current-run orchestration
 state, but it is still lower authority than trusted tool evidence and the
 verification gate.
 
+`projectForCodingTurn()` can include this bounded session projection under
+`【Current Plan Runtime Session】`. The injection order is:
+
+1. base system prompt
+2. current execution plan
+3. current plan route summary
+4. current plan runtime session summary
+5. governed local Workspace Memory
+6. optional plast-mem context
+7. TaskMemory / operational trace / transcript projection
+
+This wiring is context-only. It does not expose `transition()`, `replacePlan()`,
+workflow execution, or replacement-plan submission to the coding-runner model
+tool loop.
+
 ## Evidence Reconciliation
 
 `reconcilePlanEvidence()` defines the first current-run evidence reconciliation
@@ -843,6 +858,8 @@ Consequences:
   state, or satisfy proof gates.
 - A projected session summary can inform the model about current-run session
   history, but it still cannot control the session or prove completion.
+- The coding context projection may include bounded session summaries, but this
+  is still prompt context only and not a session control channel.
 
 ## Reconciler Contract
 
@@ -885,10 +902,10 @@ decides whether the run can report success.
 
 ## Future Slices
 
-1. `feat(computer-use-mcp): project plan session summaries into coding context`
-   - Wire only bounded session summaries into context projection; do not expose
-     session mutation or workflow execution controls by default.
-
-2. `feat(computer-use-mcp): wire host-owned plan session into multi-lane workflow runs`
+1. `feat(computer-use-mcp): wire host-owned plan session into multi-lane workflow runs`
    - Use the session boundary as the current-run state/audit owner for explicit
      workflow reconciliation, replacement-plan, and transition events.
+
+2. `test(computer-use-mcp): define plan session recovery replay contract`
+   - Capture failed/blocked session histories as deterministic replay evidence
+     before expanding runtime recovery behavior.
